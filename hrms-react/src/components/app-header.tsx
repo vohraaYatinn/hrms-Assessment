@@ -1,6 +1,6 @@
 
 import type { ReactNode } from 'react'
-import { Search, Bell, Plus } from 'lucide-react'
+import { Search, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
@@ -12,11 +12,11 @@ interface AppHeaderProps {
 
 export function AppHeader({ title, subtitle, action }: AppHeaderProps) {
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border bg-card px-6">
+    <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-[#dfe5f7] bg-white/90 px-6 backdrop-blur">
       <div>
-        <h1 className="text-[15px] font-semibold uppercase text-foreground tracking-wide">{title}</h1>
+        <h1 className="text-[1.05rem] font-semibold tracking-tight text-[#2b418c]">{title}</h1>
         {subtitle && (
-          <p className="text-xs text-muted-foreground">{subtitle}</p>
+          <p className="text-xs text-muted-foreground/90">{subtitle}</p>
         )}
       </div>
       <div className="flex items-center gap-3">
@@ -24,16 +24,13 @@ export function AppHeader({ title, subtitle, action }: AppHeaderProps) {
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input 
             placeholder="Search..." 
-            className="w-56 pl-9 h-9 text-sm bg-secondary border border-border focus-visible:ring-1"
+            className="h-9 w-56 rounded-lg border-[#d8deef] bg-white pl-9 text-sm shadow-none focus-visible:ring-2 focus-visible:ring-[#2b418c]/20"
           />
-          <kbd className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none hidden h-5 select-none items-center gap-1 rounded border border-border bg-background px-1.5 font-mono text-[10px] font-medium text-muted-foreground sm:flex">
+          <kbd className="pointer-events-none absolute right-3 top-1/2 hidden h-5 -translate-y-1/2 select-none items-center gap-1 rounded border border-[#e0e5f3] bg-white px-1.5 font-mono text-[10px] font-medium text-muted-foreground sm:flex">
             Ctrl K
           </kbd>
         </div>
-        <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground">
-          <Bell className="h-4 w-4" />
-        </Button>
-        <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full bg-secondary text-muted-foreground hover:bg-secondary/80 hover:text-foreground">
+        <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full bg-[#edf1ff] text-[#2b418c] hover:bg-[#e3e9ff]">
           <Plus className="h-4 w-4" />
         </Button>
         {action && <div>{action}</div>}

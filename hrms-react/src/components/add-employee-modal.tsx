@@ -29,19 +29,17 @@ interface AddEmployeeModalProps {
 }
 
 interface FormErrors {
-  employeeId?: string
   fullName?: string
   email?: string
   department?: string
 }
 
 export function AddEmployeeModal({ open, onOpenChange }: AddEmployeeModalProps) {
-  const { employees, addEmployee } = useHRMS()
+  const { addEmployee } = useHRMS()
   const [loading, setLoading] = useState(false)
   const [errors, setErrors] = useState<FormErrors>({})
   
   const [formData, setFormData] = useState({
-    employeeId: '',
     fullName: '',
     email: '',
     department: '' as Department | '',
@@ -49,12 +47,6 @@ export function AddEmployeeModal({ open, onOpenChange }: AddEmployeeModalProps) 
 
   const validateForm = (): boolean => {
     const newErrors: FormErrors = {}
-
-    if (!formData.employeeId.trim()) {
-      newErrors.employeeId = 'Employee ID is required'
-    } else if (employees.some((e) => e.employeeId === formData.employeeId.trim())) {
-      newErrors.employeeId = 'Employee ID already exists'
-    }
 
     if (!formData.fullName.trim()) {
       newErrors.fullName = 'Full name is required'
@@ -80,21 +72,17 @@ export function AddEmployeeModal({ open, onOpenChange }: AddEmployeeModalProps) 
     if (!validateForm()) return
 
     setLoading(true)
-    
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 800))
-    
+
     try {
-      addEmployee({
-        employeeId: formData.employeeId.trim(),
+      await addEmployee({
         fullName: formData.fullName.trim(),
         email: formData.email.trim(),
         department: formData.department as Department,
       })
-      
+
       toast.success('Employee added successfully')
       onOpenChange(false)
-      setFormData({ employeeId: '', fullName: '', email: '', department: '' })
+      setFormData({ fullName: '', email: '', department: '' })
       setErrors({})
     } catch {
       toast.error('Failed to add employee')
@@ -105,7 +93,7 @@ export function AddEmployeeModal({ open, onOpenChange }: AddEmployeeModalProps) 
 
   const handleClose = (isOpen: boolean) => {
     if (!isOpen) {
-      setFormData({ employeeId: '', fullName: '', email: '', department: '' })
+      setFormData({ fullName: '', email: '', department: '' })
       setErrors({})
     }
     onOpenChange(isOpen)
@@ -121,23 +109,6 @@ export function AddEmployeeModal({ open, onOpenChange }: AddEmployeeModalProps) 
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="employeeId" className="text-sm text-foreground">Employee ID</Label>
-            <Input
-              id="employeeId"
-              placeholder="e.g., EMP008"
-              value={formData.employeeId}
-              onChange={(e) =>
-                setFormData((prev) => ({ ...prev, employeeId: e.target.value }))
-              }
-              aria-invalid={!!errors.employeeId}
-              className="bg-secondary border-0 focus-visible:ring-1 focus-visible:ring-ring"
-            />
-            {errors.employeeId && (
-              <p className="text-xs text-destructive">{errors.employeeId}</p>
-            )}
-          </div>
-
           <div className="space-y-2">
             <Label htmlFor="fullName" className="text-sm text-foreground">Full Name</Label>
             <Input

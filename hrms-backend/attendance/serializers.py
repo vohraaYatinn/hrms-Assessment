@@ -63,3 +63,35 @@ class AttendanceSerializer(serializers.ModelSerializer):
                     {"non_field_errors": ["Attendance for this employee on this date already exists."]}
                 )
         return attrs
+
+
+class BulkAttendanceSerializer(serializers.Serializer):
+    """Apply the same status to many employees for one date (creates or updates rows)."""
+
+    date = serializers.DateField()
+    status = serializers.ChoiceField(choices=AttendanceStatus.choices)
+    employee_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+        allow_null=True,
+    )
+
+    def validate_employee_ids(self, value):
+        """Empty list means no employees; None is handled in the view (all staff)."""
+        if value is not None and len(value) == 0:
+            raise serializers.ValidationError("employee_ids cannot be an empty list; omit the field to target all employees.")
+        return value
+
+
+DEMO_PAST_STATUS_RANDOM = "RANDOM"
+
+
+class DemoPastAttendanceSerializer(serializers.Serializer):
+    """Mark every employee for the last ``days`` calendar days before today (fixed or random status)."""
+
+    days = serializers.IntegerField(min_value=1, max_value=366)
+    status = serializers.ChoiceField(
+        choices=list(AttendanceStatus.choices)
+        + [(DEMO_PAST_STATUS_RANDOM, "Random")],
+        default=AttendanceStatus.PRESENT,
+    )

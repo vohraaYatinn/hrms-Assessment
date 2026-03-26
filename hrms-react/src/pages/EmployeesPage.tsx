@@ -1,8 +1,7 @@
-import { useState, useMemo } from 'react'
-import { Plus, Search, Trash2, Users, MoreHorizontal, Mail } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Plus, Search, Sparkles, Trash2, Users, MoreHorizontal, Pencil } from 'lucide-react'
 import { toast } from 'sonner'
 import { AppHeader } from '@/components/app-header'
-import { AddEmployeeModal } from '@/components/add-employee-modal'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -10,6 +9,22 @@ import { Badge } from '@/components/ui/badge'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Empty, EmptyMedia, EmptyTitle, EmptyDescription, EmptyContent } from '@/components/ui/empty'
+import { Label } from '@/components/ui/label'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   Table,
   TableBody,
@@ -25,31 +40,293 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { DEPARTMENTS, type Department, type Employee } from '@/lib/types'
 import { useHRMS } from '@/lib/store'
+import {
+  createDemoEmployees,
+  createEmployee,
+  deleteAllEmployees,
+  fetchAllEmployees,
+  fetchAttendance,
+  fetchEmployeesPage,
+  removeEmployee,
+  updateEmployee,
+} from '../../backend/api.js'
+
+const EMPLOYEES_SYNC_CHANNEL = 'hrms-employees-sync'
+
+type ListDepartmentFilter = Department | '__all__'
 
 export function EmployeesPage() {
-  const { employees, deleteEmployee } = useHRMS()
-  const [showAddModal, setShowAddModal] = useState(false)
+  const {
+    replaceEmployeesSnapshot,
+    replaceAttendanceSnapshot,
+    employees: globalEmployees,
+  } = useHRMS()
+  const [employees, setEmployees] = useState<Employee[]>([])
+  const [totalCount, setTotalCount] = useState(0)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
+  const [listDepartmentFilter, setListDepartmentFilter] =
+    useState<ListDepartmentFilter>('__all__')
   const [searchQuery, setSearchQuery] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [isLoading, setIsLoading] = useState(true)
+  const [isSaving, setIsSaving] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
-  const [isLoading] = useState(false)
+  const [showPurgeAllConfirm, setShowPurgeAllConfirm] = useState(false)
+  const [showDemoModal, setShowDemoModal] = useState(false)
+  const [demoCount, setDemoCount] = useState('10')
+  const [isDemoLoading, setIsDemoLoading] = useState(false)
+  const [isPurgeLoading, setIsPurgeLoading] = useState(false)
+  const [showFormModal, setShowFormModal] = useState(false)
+  const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null)
+  const [formData, setFormData] = useState({
+    fullName: '',
+    email: '',
+    department: '' as Department | '',
+  })
+  const [errors, setErrors] = useState<{
+    fullName?: string
+    email?: string
+    department?: string
+  }>({})
+  const submitGuardRef = useRef(false)
+  const purgeGuardRef = useRef(false)
+  const syncChannelRef = useRef<BroadcastChannel | null>(null)
+  const skipSearchPageResetRef = useRef(true)
 
-  const filteredEmployees = useMemo(() => {
-    if (!searchQuery.trim()) return employees
-    const query = searchQuery.toLowerCase()
-    return employees.filter(
-      (e) =>
-        e.fullName.toLowerCase().includes(query) ||
-        e.department.toLowerCase().includes(query) ||
-        e.employeeId.toLowerCase().includes(query)
-    )
-  }, [employees, searchQuery])
+  const broadcastEmployeesChanged = useCallback(() => {
+    try {
+      syncChannelRef.current?.postMessage({ type: 'employees-changed' })
+    } catch {
+      /* ignore */
+    }
+  }, [])
 
-  const handleDelete = () => {
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedSearch(searchQuery), 300)
+    return () => window.clearTimeout(t)
+  }, [searchQuery])
+
+  useEffect(() => {
+    if (skipSearchPageResetRef.current) {
+      skipSearchPageResetRef.current = false
+      return
+    }
+    setPage(1)
+  }, [debouncedSearch])
+
+  const loadTable = useCallback(async () => {
+    setIsLoading(true)
+    try {
+      const { employees: rows, count } = await fetchEmployeesPage({
+        page,
+        pageSize,
+        search: debouncedSearch.trim() || undefined,
+        department:
+          listDepartmentFilter === '__all__' ? undefined : listDepartmentFilter,
+        ordering: 'full_name,employee_id',
+      })
+      setEmployees(rows)
+      setTotalCount(count)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load employees'
+      toast.error(message)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [page, pageSize, debouncedSearch, listDepartmentFilter])
+
+  const refreshAfterMutation = useCallback(async () => {
+    try {
+      const [all, attendanceRows] = await Promise.all([
+        fetchAllEmployees(),
+        fetchAttendance(),
+      ])
+      replaceEmployeesSnapshot(all)
+      replaceAttendanceSnapshot(attendanceRows)
+      await loadTable()
+      broadcastEmployeesChanged()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to refresh'
+      toast.error(message)
+    }
+  }, [
+    loadTable,
+    replaceEmployeesSnapshot,
+    replaceAttendanceSnapshot,
+    broadcastEmployeesChanged,
+  ])
+
+  useEffect(() => {
+    void loadTable()
+  }, [loadTable])
+
+  useEffect(() => {
+    if (typeof BroadcastChannel === 'undefined') return
+    const ch = new BroadcastChannel(EMPLOYEES_SYNC_CHANNEL)
+    syncChannelRef.current = ch
+    ch.onmessage = () => {
+      void (async () => {
+        try {
+          const [all, attendanceRows] = await Promise.all([
+            fetchAllEmployees(),
+            fetchAttendance(),
+          ])
+          replaceEmployeesSnapshot(all)
+          replaceAttendanceSnapshot(attendanceRows)
+        } catch {
+          /* keep existing */
+        }
+        await loadTable()
+      })()
+    }
+    return () => {
+      ch.close()
+      syncChannelRef.current = null
+    }
+  }, [loadTable, replaceEmployeesSnapshot, replaceAttendanceSnapshot])
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
+  const hasActiveListFilters =
+    debouncedSearch.trim() !== '' || listDepartmentFilter !== '__all__'
+
+  const openAddModal = () => {
+    setEditingEmployee(null)
+    setFormData({ fullName: '', email: '', department: '' })
+    setErrors({})
+    setShowFormModal(true)
+  }
+
+  const openEditModal = (employee: Employee) => {
+    setEditingEmployee(employee)
+    setFormData({
+      fullName: employee.fullName,
+      email: employee.email,
+      department: employee.department,
+    })
+    setErrors({})
+    setShowFormModal(true)
+  }
+
+  const validateForm = () => {
+    const nextErrors: typeof errors = {}
+    const fullName = formData.fullName.trim()
+    const email = formData.email.trim().toLowerCase()
+
+    if (!fullName) {
+      nextErrors.fullName = 'Full name is required'
+    }
+
+    if (!email) {
+      nextErrors.email = 'Email is required'
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      nextErrors.email = 'Please enter a valid email'
+    }
+
+    if (!formData.department) {
+      nextErrors.department = 'Department is required'
+    }
+
+    setErrors(nextErrors)
+    return Object.keys(nextErrors).length === 0
+  }
+
+  const handleSubmitForm = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (submitGuardRef.current) return
+    if (!validateForm()) return
+    submitGuardRef.current = true
+    setIsSaving(true)
+    try {
+      if (editingEmployee) {
+        await updateEmployee(editingEmployee.id, {
+          fullName: formData.fullName.trim(),
+          email: formData.email.trim().toLowerCase(),
+          department: formData.department as Department,
+        })
+        toast.success('Employee updated successfully')
+      } else {
+        await createEmployee({
+          fullName: formData.fullName.trim(),
+          email: formData.email.trim().toLowerCase(),
+          department: formData.department as Department,
+        })
+        toast.success('Employee added successfully')
+      }
+      await refreshAfterMutation()
+      setShowFormModal(false)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to save employee'
+      toast.error(message)
+    } finally {
+      setIsSaving(false)
+      submitGuardRef.current = false
+    }
+  }
+
+  const handleDelete = async () => {
     if (deleteTarget) {
-      deleteEmployee(deleteTarget)
-      toast.success('Employee deleted successfully')
-      setDeleteTarget(null)
+      try {
+        await removeEmployee(deleteTarget)
+        toast.success('Employee deleted successfully')
+        setDeleteTarget(null)
+        await refreshAfterMutation()
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to delete employee'
+        toast.error(message)
+      }
+    }
+  }
+
+  const handleAddDemo = async () => {
+    const parsed = Number.parseInt(demoCount.trim(), 10)
+    if (!Number.isFinite(parsed) || parsed < 1) {
+      toast.error('Enter a whole number from 1 to 200.')
+      return
+    }
+    const n = Math.min(200, Math.max(1, parsed))
+    setIsDemoLoading(true)
+    try {
+      const result = await createDemoEmployees(n)
+      const created =
+        result && typeof result.created === 'number' ? result.created : n
+      toast.success(`Created ${created} demo employee(s).`)
+      setShowDemoModal(false)
+      setDemoCount('10')
+      await refreshAfterMutation()
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to create demo employees'
+      toast.error(message)
+    } finally {
+      setIsDemoLoading(false)
+    }
+  }
+
+  const handlePurgeAll = async () => {
+    if (purgeGuardRef.current) return
+    purgeGuardRef.current = true
+    setIsPurgeLoading(true)
+    try {
+      const result = await deleteAllEmployees()
+      const n =
+        result && typeof result.deleted_employees === 'number'
+          ? result.deleted_employees
+          : 0
+      toast.success(
+        n === 0 ? 'No employees to delete.' : `Deleted ${n} employee(s).`,
+      )
+      setShowPurgeAllConfirm(false)
+      await refreshAfterMutation()
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to delete employees'
+      toast.error(message)
+    } finally {
+      setIsPurgeLoading(false)
+      purgeGuardRef.current = false
     }
   }
 
@@ -63,12 +340,12 @@ export function EmployeesPage() {
     <div className="min-h-screen">
       <AppHeader
         title="Employees"
-        subtitle={`${employees.length} total employees`}
+        subtitle={`${globalEmployees.length} total employees`}
         action={
           <Button
-            onClick={() => setShowAddModal(true)}
+            onClick={openAddModal}
             size="sm"
-            className="h-8 bg-primary text-primary-foreground hover:bg-primary/90"
+            className="h-9 rounded-md bg-[#2b418c] px-3 text-primary-foreground hover:bg-[#243777]"
           >
             <Plus className="mr-1.5 h-3.5 w-3.5" />
             Add Employee
@@ -76,22 +353,85 @@ export function EmployeesPage() {
         }
       />
       <div className="p-6">
-        <div className="mb-4 flex items-center gap-3">
+        <div className="mb-4 flex flex-wrap items-center gap-3">
           <div className="relative flex-1 max-w-sm">
             <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="Search employees..."
+              placeholder="Search name, email, or ID…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9 h-9 bg-secondary border-0 focus-visible:ring-1 focus-visible:ring-ring"
+              className="h-9 rounded-lg border-[#d8deef] bg-white pl-9 shadow-none focus-visible:ring-2 focus-visible:ring-[#2b418c]/20"
             />
           </div>
-          <Badge variant="secondary" className="h-9 px-3 font-normal">
-            {filteredEmployees.length} results
+          <Select
+            value={listDepartmentFilter}
+            onValueChange={(value) => {
+              setListDepartmentFilter(value as ListDepartmentFilter)
+              setPage(1)
+            }}
+          >
+            <SelectTrigger className="h-9 w-[min(100%,11rem)] rounded-lg border-[#d8deef] bg-white shadow-none">
+              <SelectValue placeholder="Department" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">All departments</SelectItem>
+              {DEPARTMENTS.map((d) => (
+                <SelectItem key={d} value={d}>
+                  {d}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={String(pageSize)}
+            onValueChange={(value) => {
+              setPageSize(Number(value))
+              setPage(1)
+            }}
+          >
+            <SelectTrigger className="h-9 w-[4.5rem] rounded-lg border-[#d8deef] bg-white shadow-none">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="10">10</SelectItem>
+              <SelectItem value="20">20</SelectItem>
+              <SelectItem value="50">50</SelectItem>
+            </SelectContent>
+          </Select>
+          <Badge variant="secondary" className="h-9 border-[#dfe5f7] bg-white px-3 font-normal text-[#2b418c]">
+            {totalCount} results
           </Badge>
+          <Badge className="h-9 border-[#ead8a2] bg-[#fff8df] px-3 font-medium text-[#7a621e]">
+            Employee Directory
+          </Badge>
+          <div className="flex w-full flex-wrap gap-2 sm:ml-auto sm:w-auto">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9 border-[#d8deef] bg-white text-[#2b418c] hover:bg-[#f4f6fc]"
+              onClick={() => {
+                setDemoCount('10')
+                setShowDemoModal(true)
+              }}
+            >
+              <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+              Add demo data
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9 border-destructive/40 bg-white text-destructive hover:bg-destructive/5"
+              onClick={() => setShowPurgeAllConfirm(true)}
+              disabled={globalEmployees.length === 0}
+            >
+              Delete all
+            </Button>
+          </div>
         </div>
 
-        <div className="rounded-lg border border-border bg-card overflow-hidden">
+        <div className="overflow-hidden rounded-xl border border-[#dfe5f7] bg-white shadow-[0_8px_24px_rgba(43,65,140,0.05)]">
           {isLoading ? (
             <div className="p-4 space-y-4">
               {[...Array(5)].map((_, i) => (
@@ -104,23 +444,23 @@ export function EmployeesPage() {
                 </div>
               ))}
             </div>
-          ) : filteredEmployees.length === 0 ? (
+          ) : employees.length === 0 ? (
             <Empty className="py-16">
               <EmptyMedia variant="icon">
                 <Users className="h-6 w-6" />
               </EmptyMedia>
               <EmptyTitle>
-                {searchQuery ? 'No employees found' : 'No employees yet'}
+                {hasActiveListFilters ? 'No matches' : 'No employees yet'}
               </EmptyTitle>
               <EmptyDescription>
-                {searchQuery
-                  ? 'Try adjusting your search query.'
+                {hasActiveListFilters
+                  ? 'Try different search or department filters.'
                   : 'Add your first employee to get started.'}
               </EmptyDescription>
-              {!searchQuery && (
+              {!hasActiveListFilters && (
                 <EmptyContent>
                   <Button
-                    onClick={() => setShowAddModal(true)}
+                    onClick={openAddModal}
                     size="sm"
                     className="bg-primary text-primary-foreground hover:bg-primary/90"
                   >
@@ -133,21 +473,21 @@ export function EmployeesPage() {
           ) : (
             <Table>
               <TableHeader>
-                <TableRow className="hover:bg-transparent border-border">
-                  <TableHead className="text-xs font-medium text-muted-foreground">Employee</TableHead>
-                  <TableHead className="text-xs font-medium text-muted-foreground">ID</TableHead>
-                  <TableHead className="text-xs font-medium text-muted-foreground">Email</TableHead>
-                  <TableHead className="text-xs font-medium text-muted-foreground">Department</TableHead>
-                  <TableHead className="text-xs font-medium text-muted-foreground w-16"></TableHead>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="text-muted-foreground">Employee</TableHead>
+                  <TableHead className="text-muted-foreground">ID</TableHead>
+                  <TableHead className="text-muted-foreground">Email</TableHead>
+                  <TableHead className="text-muted-foreground">Department</TableHead>
+                  <TableHead className="w-16 text-muted-foreground"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredEmployees.map((employee) => (
-                  <TableRow key={employee.id} className="border-border group">
-                    <TableCell className="py-3">
+                {employees.map((employee) => (
+                  <TableRow key={employee.id} className="group">
+                    <TableCell>
                       <div className="flex items-center gap-3">
-                        <Avatar className="h-8 w-8 border border-border">
-                          <AvatarFallback className="bg-secondary text-foreground text-xs font-medium">
+                        <Avatar className="h-8 w-8 border border-[#d9e1f4]">
+                          <AvatarFallback className="bg-[#edf2ff] text-[#2b418c] text-xs font-medium">
                             {getInitials(employee.fullName)}
                           </AvatarFallback>
                         </Avatar>
@@ -156,37 +496,40 @@ export function EmployeesPage() {
                         </span>
                       </div>
                     </TableCell>
-                    <TableCell className="py-3">
-                      <code className="text-xs font-mono text-muted-foreground bg-secondary px-1.5 py-0.5 rounded">
+                    <TableCell>
+                      <code className="rounded bg-[#f1f4ff] px-1.5 py-0.5 font-mono text-xs text-[#4d5e94]">
                         {employee.employeeId}
                       </code>
                     </TableCell>
-                    <TableCell className="py-3">
+                    <TableCell>
                       <span className="text-sm text-muted-foreground">
                         {employee.email}
                       </span>
                     </TableCell>
-                    <TableCell className="py-3">
-                      <Badge variant="secondary" className="font-normal text-xs">
+                    <TableCell>
+                      <Badge variant="secondary" className="border-[#dfe5f7] bg-[#f4f7ff] font-normal text-xs text-[#405186]">
                         {employee.department}
                       </Badge>
                     </TableCell>
-                    <TableCell className="py-3">
+                    <TableCell>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
+                            className="h-8 w-8 rounded-md opacity-0 transition-opacity group-hover:opacity-100 hover:bg-[#eef3ff] hover:text-[#2b418c]"
                           >
                             <MoreHorizontal className="h-4 w-4" />
                             <span className="sr-only">Actions for {employee.fullName}</span>
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-48">
-                          <DropdownMenuItem className="text-sm">
-                            <Mail className="mr-2 h-4 w-4" />
-                            Send Email
+                          <DropdownMenuItem
+                            className="text-sm"
+                            onClick={() => openEditModal(employee)}
+                          >
+                            <Pencil className="mr-2 h-4 w-4" />
+                            Edit Employee
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
@@ -204,10 +547,210 @@ export function EmployeesPage() {
               </TableBody>
             </Table>
           )}
+          {!isLoading && employees.length > 0 && (
+            <div className="flex flex-col gap-3 border-t border-[#dfe5f7] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-muted-foreground">
+                Page {page} of {totalPages} · {totalCount} total
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 border-[#d8deef] bg-white"
+                  disabled={page <= 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                >
+                  Previous
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 border-[#d8deef] bg-white"
+                  disabled={page >= totalPages}
+                  onClick={() => setPage((p) => p + 1)}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      <AddEmployeeModal open={showAddModal} onOpenChange={setShowAddModal} />
+      <Dialog
+        open={showFormModal}
+        onOpenChange={(open) => {
+          if (!isSaving) setShowFormModal(open)
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-foreground">
+              {editingEmployee ? 'Edit Employee' : 'Add New Employee'}
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              {editingEmployee
+                ? 'Update employee details and save your changes.'
+                : 'Employee ID is assigned automatically when you save.'}
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSubmitForm} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="fullName" className="text-sm text-foreground">
+                Full Name
+              </Label>
+              <Input
+                id="fullName"
+                value={formData.fullName}
+                onChange={(e) =>
+                  setFormData((prev) => ({ ...prev, fullName: e.target.value }))
+                }
+                aria-invalid={!!errors.fullName}
+                className="h-10 rounded-lg border-[#d8deef] bg-white shadow-none focus-visible:ring-2 focus-visible:ring-[#2b418c]/20"
+              />
+              {errors.fullName && (
+                <p className="text-xs text-destructive">{errors.fullName}</p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="email" className="text-sm text-foreground">
+                Email
+              </Label>
+              <Input
+                id="email"
+                type="email"
+                value={formData.email}
+                onChange={(e) =>
+                  setFormData((prev) => ({ ...prev, email: e.target.value }))
+                }
+                aria-invalid={!!errors.email}
+                className="h-10 rounded-lg border-[#d8deef] bg-white shadow-none focus-visible:ring-2 focus-visible:ring-[#2b418c]/20"
+              />
+              {errors.email && (
+                <p className="text-xs text-destructive">{errors.email}</p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-sm text-foreground">Department</Label>
+              <Select
+                value={formData.department}
+                onValueChange={(value: Department) =>
+                  setFormData((prev) => ({ ...prev, department: value }))
+                }
+              >
+                <SelectTrigger
+                  aria-invalid={!!errors.department}
+                  className="h-10 rounded-lg border-[#d8deef] bg-white shadow-none"
+                >
+                  <SelectValue placeholder="Select department" />
+                </SelectTrigger>
+                <SelectContent>
+                  {DEPARTMENTS.map((department) => (
+                    <SelectItem key={department} value={department}>
+                      {department}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {errors.department && (
+                <p className="text-xs text-destructive">{errors.department}</p>
+              )}
+            </div>
+
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setShowFormModal(false)}
+                disabled={isSaving}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={isSaving}
+                className="bg-[#2b418c] text-white hover:bg-[#243777]"
+              >
+                {isSaving
+                  ? editingEmployee
+                    ? 'Saving...'
+                    : 'Adding...'
+                  : editingEmployee
+                    ? 'Save Changes'
+                    : 'Add Employee'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={showDemoModal}
+        onOpenChange={(open) => {
+          if (!isDemoLoading) setShowDemoModal(open)
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-foreground">Add demo employees</DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              Creates synthetic employees with unique demo emails and auto-assigned IDs.
+              Maximum 200 per request.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="demoCount" className="text-sm text-foreground">
+              How many to add
+            </Label>
+            <Input
+              id="demoCount"
+              type="number"
+              min={1}
+              max={200}
+              value={demoCount}
+              onChange={(e) => setDemoCount(e.target.value)}
+              disabled={isDemoLoading}
+              className="h-10 rounded-lg border-[#d8deef] bg-white shadow-none focus-visible:ring-2 focus-visible:ring-[#2b418c]/20"
+            />
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setShowDemoModal(false)}
+              disabled={isDemoLoading}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={isDemoLoading}
+              className="bg-[#2b418c] text-white hover:bg-[#243777]"
+              onClick={() => {
+                void handleAddDemo()
+              }}
+            >
+              {isDemoLoading ? 'Adding…' : 'Add demo'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <ConfirmDialog
+        open={showPurgeAllConfirm}
+        onOpenChange={(open) => !open && !isPurgeLoading && setShowPurgeAllConfirm(false)}
+        title="Delete all employees?"
+        description="This removes every employee from the database. Related attendance records are removed as well. This cannot be undone."
+        confirmLabel={isPurgeLoading ? 'Deleting…' : 'Delete all'}
+        onConfirm={() => {
+          void handlePurgeAll()
+        }}
+        variant="destructive"
+      />
 
       <ConfirmDialog
         open={!!deleteTarget}
@@ -215,7 +758,9 @@ export function EmployeesPage() {
         title="Delete Employee"
         description={`Are you sure you want to delete ${employeeToDelete?.fullName}? This action cannot be undone.`}
         confirmLabel="Delete"
-        onConfirm={handleDelete}
+        onConfirm={() => {
+          void handleDelete()
+        }}
         variant="destructive"
       />
     </div>

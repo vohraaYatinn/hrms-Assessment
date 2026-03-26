@@ -2,8 +2,6 @@
 Serializers for creating and reading employee resources.
 """
 
-import re
-
 from rest_framework import serializers
 
 from .models import Employee
@@ -13,7 +11,8 @@ class EmployeeSerializer(serializers.ModelSerializer):
     """
     Full read/write representation of an ``Employee``.
 
-    Enforces alphanumeric ``employee_id``, unique identifiers, and minimum name length.
+    ``employee_id`` is assigned by the server (``EMP{pk:04d}``) and is not
+    accepted from clients on create or update.
     """
 
     class Meta:
@@ -27,16 +26,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         )
-        read_only_fields = ("id", "created_at", "updated_at")
-
-    def validate_employee_id(self, value):
-        """Require a non-empty alphanumeric business identifier."""
-        value = (value or "").strip()
-        if not value:
-            raise serializers.ValidationError("employee_id is required.")
-        if not re.fullmatch(r"[A-Za-z0-9]+", value):
-            raise serializers.ValidationError("employee_id must be alphanumeric.")
-        return value
+        read_only_fields = ("id", "employee_id", "created_at", "updated_at")
 
     def validate_email(self, value):
         """Normalize email and rely on model uniqueness for conflicts."""
@@ -52,31 +42,21 @@ class EmployeeSerializer(serializers.ModelSerializer):
         return name
 
     def validate(self, attrs):
-        """Cross-field checks for create/update flows."""
-        employee_id = attrs.get("employee_id")
+        """Cross-field checks for create/update flows (email uniqueness)."""
         email = attrs.get("email")
         if self.instance is None:
-            if Employee.objects.filter(employee_id=employee_id).exists():
+            if email and Employee.objects.filter(email__iexact=email).exists():
                 raise serializers.ValidationError(
-                    {"employee_id": "An employee with this employee_id already exists."}
+                    {"email": "An employee with this email already exists."}
                 )
-            if Employee.objects.filter(email__iexact=email).exists():
-                raise serializers.ValidationError({"email": "An employee with this email already exists."})
         else:
-            if (
-                employee_id
-                and Employee.objects.exclude(pk=self.instance.pk)
-                .filter(employee_id=employee_id)
-                .exists()
-            ):
-                raise serializers.ValidationError(
-                    {"employee_id": "An employee with this employee_id already exists."}
-                )
             if (
                 email
                 and Employee.objects.exclude(pk=self.instance.pk)
                 .filter(email__iexact=email)
                 .exists()
             ):
-                raise serializers.ValidationError({"email": "An employee with this email already exists."})
+                raise serializers.ValidationError(
+                    {"email": "An employee with this email already exists."}
+                )
         return attrs

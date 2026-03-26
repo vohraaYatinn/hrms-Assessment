@@ -45,15 +45,15 @@ export function StatCard({
   return (
     <div
       className={cn(
-        'rounded-lg border border-border bg-card p-4',
+        'rounded-xl border border-[#dfe5f7] bg-white p-4 shadow-[0_8px_24px_rgba(43,65,140,0.06)]',
         className
       )}
     >
       <div className="flex items-center gap-3 mb-3">
-        <div className={cn('rounded-md p-2', styles.icon)}>
+        <div className={cn('rounded-lg p-2', styles.icon)}>
           <Icon className="h-4 w-4" />
         </div>
-        <p className="text-xs font-medium text-muted-foreground">{label}</p>
+        <p className="text-xs font-medium tracking-wide text-muted-foreground">{label}</p>
       </div>
       <div className="flex items-baseline gap-2">
         <p className={cn('text-2xl font-semibold tracking-tight', styles.value)}>{value}</p>

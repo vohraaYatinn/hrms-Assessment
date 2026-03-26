@@ -1,52 +1,127 @@
-import { useState, useCallback, useMemo, type ReactNode } from 'react'
+import { useState, useCallback, useMemo, useEffect, type ReactNode } from 'react'
 import type { Employee, AttendanceRecord } from '@/lib/types'
 import { HRMSContext, type HRMSState, mockEmployees, mockAttendance, REFERENCE_DATE } from '@/lib/store'
+import {
+  fetchEmployees,
+  fetchAttendance,
+  fetchAttendanceByDate,
+  createEmployee,
+  removeEmployee,
+  bulkAttendance,
+} from '../../backend/api.js'
+
+const EMPLOYEES_SYNC_CHANNEL = 'hrms-employees-sync'
+
+function postEmployeesSync() {
+  try {
+    const bc = new BroadcastChannel(EMPLOYEES_SYNC_CHANNEL)
+    bc.postMessage({ type: 'employees-changed' })
+    bc.close()
+  } catch {
+    /* ignore */
+  }
+}
 
 export function HRMSProvider({ children }: { children: ReactNode }) {
   const [employees, setEmployees] = useState<Employee[]>(mockEmployees)
   const [attendance, setAttendance] = useState<AttendanceRecord[]>(mockAttendance)
-  
-  // Use reference date consistently to avoid hydration mismatch
-  // In production, this would come from a server timestamp
-  const todayDate = REFERENCE_DATE
+  const [hasLoadedFromBackend, setHasLoadedFromBackend] = useState(false)
 
-  const addEmployee = useCallback((employeeData: Omit<Employee, 'id' | 'createdAt'>) => {
-    const newEmployee: Employee = {
-      ...employeeData,
-      id: crypto.randomUUID(),
-      createdAt: new Date().toISOString(),
+  useEffect(() => {
+    let mounted = true
+
+    async function loadInitialData() {
+      try {
+        const [remoteEmployees, remoteAttendance] = await Promise.all([
+          fetchEmployees(),
+          fetchAttendance(),
+        ])
+        if (!mounted) return
+        setEmployees(remoteEmployees)
+        setAttendance(remoteAttendance)
+      } catch {
+        // Keep mock data as fallback when backend is unavailable.
+      } finally {
+        if (mounted) {
+          setHasLoadedFromBackend(true)
+        }
+      }
     }
-    setEmployees((prev) => [...prev, newEmployee])
+
+    void loadInitialData()
+    return () => {
+      mounted = false
+    }
   }, [])
 
-  const deleteEmployee = useCallback((id: string) => {
+  useEffect(() => {
+    if (typeof BroadcastChannel === 'undefined') return
+    const ch = new BroadcastChannel(EMPLOYEES_SYNC_CHANNEL)
+    ch.onmessage = () => {
+      void (async () => {
+        try {
+          const [nextEmployees, nextAttendance] = await Promise.all([
+            fetchEmployees(),
+            fetchAttendance(),
+          ])
+          setEmployees(nextEmployees)
+          setAttendance(nextAttendance)
+        } catch {
+          /* keep existing */
+        }
+      })()
+    }
+    return () => ch.close()
+  }, [])
+
+  const replaceEmployeesSnapshot = useCallback((next: Employee[]) => {
+    setEmployees(next)
+  }, [])
+
+  const replaceAttendanceSnapshot = useCallback((rows: AttendanceRecord[]) => {
+    setAttendance(rows)
+  }, [])
+
+  const addEmployee = useCallback(async (employeeData: Omit<Employee, 'id' | 'createdAt' | 'employeeId'>) => {
+    const created = await createEmployee(employeeData)
+    setEmployees((prev) => [...prev, created])
+    postEmployeesSync()
+  }, [])
+
+  const deleteEmployee = useCallback(async (id: string) => {
+    await removeEmployee(id)
     setEmployees((prev) => prev.filter((e) => e.id !== id))
     setAttendance((prev) => prev.filter((a) => a.employeeId !== id))
+    postEmployeesSync()
+  }, [])
+
+  const syncAttendanceForDate = useCallback(async (date: string) => {
+    try {
+      const rows = await fetchAttendanceByDate(date)
+      setAttendance((prev) => [...prev.filter((a) => a.date !== date), ...rows])
+    } catch {
+      // Offline or legacy backend: keep existing client state for that date.
+    }
   }, [])
 
   const markAttendance = useCallback(
-    (employeeId: string, date: string, status: 'present' | 'absent') => {
-      setAttendance((prev) => {
-        const existingIndex = prev.findIndex(
-          (a) => a.employeeId === employeeId && a.date === date
-        )
-        if (existingIndex >= 0) {
-          const updated = [...prev]
-          updated[existingIndex] = { ...updated[existingIndex], status }
-          return updated
-        }
-        return [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            employeeId,
-            date,
-            status,
-          },
-        ]
-      })
+    async (employeeId: string, date: string, status: 'present' | 'absent') => {
+      await bulkAttendance({ date, status, employeeIds: [employeeId] })
+      await syncAttendanceForDate(date)
     },
-    []
+    [syncAttendanceForDate],
+  )
+
+  const bulkMarkAttendance = useCallback(
+    async (params: {
+      date: string
+      status: 'present' | 'absent'
+      employeeIds?: string[]
+    }) => {
+      await bulkAttendance(params)
+      await syncAttendanceForDate(params.date)
+    },
+    [syncAttendanceForDate],
   )
 
   const getEmployeeAttendance = useCallback(
@@ -57,6 +132,13 @@ export function HRMSProvider({ children }: { children: ReactNode }) {
     },
     [attendance]
   )
+
+  const todayDate = useMemo(() => {
+    if (!hasLoadedFromBackend) {
+      return REFERENCE_DATE
+    }
+    return new Date().toISOString().slice(0, 10)
+  }, [hasLoadedFromBackend])
 
   const getTodayAttendance = useCallback(() => {
     return employees.map((employee) => {
@@ -92,9 +174,13 @@ export function HRMSProvider({ children }: { children: ReactNode }) {
     () => ({
       employees,
       attendance,
+      replaceEmployeesSnapshot,
+      replaceAttendanceSnapshot,
       addEmployee,
       deleteEmployee,
       markAttendance,
+      bulkMarkAttendance,
+      syncAttendanceForDate,
       getEmployeeAttendance,
       getTodayAttendance,
       getStats,
@@ -102,9 +188,13 @@ export function HRMSProvider({ children }: { children: ReactNode }) {
     [
       employees,
       attendance,
+      replaceEmployeesSnapshot,
+      replaceAttendanceSnapshot,
       addEmployee,
       deleteEmployee,
       markAttendance,
+      bulkMarkAttendance,
+      syncAttendanceForDate,
       getEmployeeAttendance,
       getTodayAttendance,
       getStats,

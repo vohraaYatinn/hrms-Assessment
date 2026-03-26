@@ -149,9 +149,18 @@ export const mockAttendance: AttendanceRecord[] = [
 export interface HRMSState {
   employees: Employee[]
   attendance: AttendanceRecord[]
-  addEmployee: (employee: Omit<Employee, 'id' | 'createdAt'>) => void
-  deleteEmployee: (id: string) => void
-  markAttendance: (employeeId: string, date: string, status: 'present' | 'absent') => void
+  /** Keeps dashboard / attendance in sync when EmployeesPage loads or mutates its own copy. */
+  replaceEmployeesSnapshot: (employees: Employee[]) => void
+  replaceAttendanceSnapshot: (rows: AttendanceRecord[]) => void
+  addEmployee: (employee: Omit<Employee, 'id' | 'createdAt' | 'employeeId'>) => Promise<void>
+  deleteEmployee: (id: string) => Promise<void>
+  markAttendance: (employeeId: string, date: string, status: 'present' | 'absent') => Promise<void>
+  bulkMarkAttendance: (params: {
+    date: string
+    status: 'present' | 'absent'
+    employeeIds?: string[]
+  }) => Promise<void>
+  syncAttendanceForDate: (date: string) => Promise<void>
   getEmployeeAttendance: (employeeId: string) => AttendanceRecord[]
   getTodayAttendance: () => { employee: Employee; status: 'present' | 'absent' | 'unmarked' }[]
   getStats: () => {
