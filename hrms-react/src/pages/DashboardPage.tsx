@@ -5,6 +5,7 @@ import { StatCard } from '@/components/stat-card'
 import { useHRMS } from '@/lib/store'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
   TableBody,
@@ -14,11 +15,48 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
+function StatCardSkeleton() {
+  return (
+    <div className="rounded-xl border border-[#dfe5f7] bg-white p-4 shadow-[0_8px_24px_rgba(43,65,140,0.06)]">
+      <div className="mb-3 flex items-center gap-3">
+        <Skeleton className="h-9 w-9 shrink-0 rounded-lg" />
+        <Skeleton className="h-3 w-28" />
+      </div>
+      <Skeleton className="h-8 w-20" />
+    </div>
+  )
+}
+
+function DashboardPanelSkeleton({ title }: { title: string }) {
+  return (
+    <div className="min-w-0 overflow-hidden rounded-xl border border-[#dfe5f7] bg-white shadow-[0_8px_24px_rgba(43,65,140,0.05)]">
+      <div className="flex min-w-0 items-center justify-between gap-2 border-b border-[#2a3a72] bg-[#1f2f69] p-4">
+        <Skeleton className="h-4 w-36 bg-white/20" />
+        <Skeleton className="h-8 w-20 shrink-0 rounded-md bg-white/15" />
+      </div>
+      <div className="divide-y divide-[#edf1fc] p-4" aria-hidden>
+        <span className="sr-only">{title} loading</span>
+        {[1, 2, 3, 4, 5].map((k) => (
+          <div key={k} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
+            <Skeleton className="h-8 w-8 shrink-0 rounded-full" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <Skeleton className="h-4 w-40 max-w-full" />
+              <Skeleton className="h-3 w-24 max-w-full" />
+            </div>
+            <Skeleton className="h-3 w-6 shrink-0" />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function DashboardPage() {
   const navigate = useNavigate()
-  const { employees, getStats, getTodayAttendance } = useHRMS()
+  const { employees, getStats, getTodayAttendance, initialDataStatus } = useHRMS()
   const stats = getStats()
   const todayAttendance = getTodayAttendance()
+  const isBootLoading = initialDataStatus === 'loading'
   const AUTH_STORAGE_KEY = 'hrmsLoggedIn'
 
   const recentEmployees = [...employees]
@@ -58,38 +96,54 @@ export function DashboardPage() {
           </Badge>
         </div>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard
-            icon={Users}
-            label="Total Employees"
-            value={stats.totalEmployees}
-            trend={{ value: 12, isPositive: true }}
-            variant="accent"
-            to="/employees"
-          />
-          <StatCard
-            icon={UserCheck}
-            label="Present Today"
-            value={stats.presentToday}
-            trend={{ value: 5, isPositive: true }}
-            variant="success"
-            to="/attendance"
-          />
-          <StatCard
-            icon={UserX}
-            label="Absent Today"
-            value={stats.absentToday}
-            variant="warning"
-            to="/attendance"
-          />
-          <StatCard
-            icon={Percent}
-            label="Attendance Rate"
-            value={`${stats.attendanceRate}%`}
-            to="/attendance/calendar"
-          />
+          {isBootLoading ? (
+            <>
+              <StatCardSkeleton />
+              <StatCardSkeleton />
+              <StatCardSkeleton />
+              <StatCardSkeleton />
+            </>
+          ) : (
+            <>
+              <StatCard
+                icon={Users}
+                label="Total Employees"
+                value={stats.totalEmployees}
+                variant="accent"
+                to="/employees"
+              />
+              <StatCard
+                icon={UserCheck}
+                label="Present Today"
+                value={stats.presentToday}
+                variant="success"
+                to="/attendance"
+              />
+              <StatCard
+                icon={UserX}
+                label="Absent Today"
+                value={stats.absentToday}
+                variant="warning"
+                to="/attendance"
+              />
+              <StatCard
+                icon={Percent}
+                label="Attendance Rate"
+                value={`${stats.attendanceRate}%`}
+                to="/attendance/calendar"
+              />
+            </>
+          )}
         </div>
 
         <div className="grid gap-6 lg:grid-cols-2">
+          {isBootLoading ? (
+            <>
+              <DashboardPanelSkeleton title="Recent employees" />
+              <DashboardPanelSkeleton title="Today's attendance" />
+            </>
+          ) : (
+            <>
           <div className="min-w-0 overflow-hidden rounded-xl border border-[#dfe5f7] bg-white shadow-[0_8px_24px_rgba(43,65,140,0.05)]">
             <div className="flex min-w-0 items-center justify-between gap-2 border-b border-[#2a3a72] bg-[#1f2f69] p-4">
               <h2 className="min-w-0 truncate text-sm font-medium text-white">Recent Employees</h2>
@@ -232,6 +286,8 @@ export function DashboardPage() {
               )}
             </div>
           </div>
+            </>
+          )}
         </div>
       </div>
     </div>

@@ -18,6 +18,7 @@ import { AppHeader } from '@/components/app-header'
 import { CollapsibleFilterBar } from '@/components/collapsible-filter-bar'
 import { AttendanceSubNav } from '@/components/attendance-subnav'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
@@ -88,6 +89,7 @@ export function AttendancePage() {
     bulkMarkAttendance,
     syncAttendanceForDate,
     replaceAttendanceSnapshot,
+    initialDataStatus,
   } = useHRMS()
   const [clearAttendanceTarget, setClearAttendanceTarget] = useState<{
     recordId: string
@@ -105,7 +107,7 @@ export function AttendancePage() {
   const [pageSize, setPageSize] = useState(20)
   const [rosterEmployees, setRosterEmployees] = useState<Employee[]>([])
   const [totalCount, setTotalCount] = useState(0)
-  const [isRosterLoading, setIsRosterLoading] = useState(true)
+  const [isRosterLoading, setIsRosterLoading] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   const [isSaving, setIsSaving] = useState(false)
   const [isSelectAllLoading, setIsSelectAllLoading] = useState(false)
@@ -136,8 +138,9 @@ export function AttendancePage() {
   }, [attendanceDate])
 
   useEffect(() => {
+    if (initialDataStatus !== 'ready') return
     void syncAttendanceForDate(dateStr)
-  }, [dateStr, syncAttendanceForDate])
+  }, [dateStr, syncAttendanceForDate, initialDataStatus])
 
   useEffect(() => {
     setPage(1)
@@ -191,8 +194,12 @@ export function AttendancePage() {
   ])
 
   useEffect(() => {
+    if (initialDataStatus !== 'ready') return
     void loadRosterPage()
-  }, [loadRosterPage])
+  }, [loadRosterPage, initialDataStatus])
+
+  const rosterWait =
+    initialDataStatus === 'loading' || isRosterLoading
 
   const dayMap = useMemo(() => {
     const m = new Map<string, AttendanceRecord>()
@@ -255,7 +262,7 @@ export function AttendancePage() {
     if (
       totalCount === 0 ||
       isSelectAllLoading ||
-      isRosterLoading ||
+      rosterWait ||
       selectAllGuardRef.current
     )
       return
@@ -294,7 +301,7 @@ export function AttendancePage() {
   }, [
     dateStr,
     debouncedSearch,
-    isRosterLoading,
+    rosterWait,
     isSelectAllLoading,
     listDepartmentFilter,
     rosterAttendanceFilter,
@@ -869,7 +876,7 @@ export function AttendancePage() {
                 <Checkbox
                   checked={headerCheckboxChecked}
                   disabled={
-                    totalCount === 0 || isRosterLoading || isSelectAllLoading
+                    totalCount === 0 || rosterWait || isSelectAllLoading
                   }
                   onCheckedChange={() => {
                     void toggleSelectAllMatching()
@@ -896,7 +903,7 @@ export function AttendancePage() {
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8"
-                disabled={safePage <= 1 || isRosterLoading}
+                disabled={safePage <= 1 || rosterWait}
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
               >
                 <ChevronLeft className="h-4 w-4" />
@@ -909,7 +916,7 @@ export function AttendancePage() {
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8"
-                disabled={safePage >= totalPages || isRosterLoading}
+                disabled={safePage >= totalPages || rosterWait}
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               >
                 <ChevronRight className="h-4 w-4" />
@@ -917,10 +924,18 @@ export function AttendancePage() {
             </div>
           </div>
 
-          {isRosterLoading ? (
-            <div className="py-16 text-center text-sm text-muted-foreground">
-              <Loader2 className="mx-auto h-8 w-8 animate-spin opacity-60" />
-              <p className="mt-2">Loading roster…</p>
+          {rosterWait ? (
+            <div className="space-y-3 p-4">
+              {[...Array(6)].map((_, i) => (
+                <div key={i} className="flex items-center gap-3">
+                  <Skeleton className="h-5 w-5 shrink-0 rounded" />
+                  <Skeleton className="h-9 w-9 shrink-0 rounded-full" />
+                  <Skeleton className="h-4 w-36" />
+                  <Skeleton className="hidden h-4 w-20 sm:block" />
+                  <Skeleton className="hidden h-4 w-24 md:block" />
+                  <Skeleton className="ml-auto h-8 w-28 shrink-0" />
+                </div>
+              ))}
             </div>
           ) : totalCount === 0 ? (
             <div className="py-16 text-center text-sm text-muted-foreground">
@@ -938,7 +953,7 @@ export function AttendancePage() {
                         <Checkbox
                           checked={headerCheckboxChecked}
                           disabled={
-                            totalCount === 0 || isRosterLoading || isSelectAllLoading
+                            totalCount === 0 || rosterWait || isSelectAllLoading
                           }
                           onCheckedChange={() => {
                             void toggleSelectAllMatching()

@@ -8,7 +8,14 @@ from .base import *  # noqa: F403, F401
 
 DEBUG = config("DEBUG", default=True, cast=bool)
 
-ALLOWED_HOSTS = ["localhost", "127.0.0.1", "[::1]", "https://hrms-assessment-4l8z.onrender.com", "https://hrms-assessment-five.vercel.app"]
+# Hostnames only — no scheme (Django compares to the Host header).
+ALLOWED_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+    "[::1]",
+    "hrms-assessment-4l8z.onrender.com",
+    "hrms-assessment-five.vercel.app",
+]
 
 DATABASES = {
     "default": {

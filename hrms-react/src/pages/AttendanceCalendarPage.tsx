@@ -24,6 +24,7 @@ import { AppHeader } from '@/components/app-header'
 import { CollapsibleFilterBar } from '@/components/collapsible-filter-bar'
 import { AttendanceSubNav } from '@/components/attendance-subnav'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -84,7 +85,7 @@ type MarkDialogState = { employee: Employee; dateStr: string } | null
 
 export function AttendanceCalendarPage() {
   const navigate = useNavigate()
-  const { syncAttendanceForDate } = useHRMS()
+  const { syncAttendanceForDate, initialDataStatus } = useHRMS()
   const [rangeMode, setRangeMode] = useState<RangeMode>('seven')
   const [focusDate, setFocusDate] = useState<Date>(() => new Date())
   const [searchQuery, setSearchQuery] = useState('')
@@ -95,9 +96,9 @@ export function AttendanceCalendarPage() {
   const [pageSize, setPageSize] = useState(20)
   const [rosterEmployees, setRosterEmployees] = useState<Employee[]>([])
   const [totalCount, setTotalCount] = useState(0)
-  const [isRosterLoading, setIsRosterLoading] = useState(true)
+  const [isRosterLoading, setIsRosterLoading] = useState(false)
   const [rangeRecords, setRangeRecords] = useState<AttendanceRecord[]>([])
-  const [isRangeLoading, setIsRangeLoading] = useState(true)
+  const [isRangeLoading, setIsRangeLoading] = useState(false)
   const [markDialog, setMarkDialog] = useState<MarkDialogState>(null)
   const [pendingMarkStatus, setPendingMarkStatus] = useState<
     'present' | 'absent' | null
@@ -154,10 +155,12 @@ export function AttendanceCalendarPage() {
   }, [page, pageSize, debouncedSearch, listDepartmentFilter])
 
   useEffect(() => {
+    if (initialDataStatus !== 'ready') return
     void loadRosterPage()
-  }, [loadRosterPage])
+  }, [loadRosterPage, initialDataStatus])
 
   useEffect(() => {
+    if (initialDataStatus !== 'ready') return
     let cancelled = false
     async function loadRange() {
       setIsRangeLoading(true)
@@ -177,7 +180,7 @@ export function AttendanceCalendarPage() {
     return () => {
       cancelled = true
     }
-  }, [rangeStartStr, rangeEndStr])
+  }, [rangeStartStr, rangeEndStr, initialDataStatus])
 
   const matrix = useMemo(() => buildMatrix(rangeRecords), [rangeRecords])
 
@@ -244,7 +247,8 @@ export function AttendanceCalendarPage() {
       ? `${format(dateColumns[0], 'MMM d')} – ${format(dateColumns[6], 'MMM d, yyyy')}`
       : format(focusDate, 'MMMM yyyy')
 
-  const isLoadingGrid = isRosterLoading || isRangeLoading
+  const isLoadingGrid =
+    initialDataStatus === 'loading' || isRosterLoading || isRangeLoading
 
   const listFilterActiveCount =
     (debouncedSearch.trim() !== '' ? 1 : 0) +
@@ -442,9 +446,18 @@ export function AttendanceCalendarPage() {
         <div className="overflow-hidden rounded-xl border border-[#dfe5f7] bg-white shadow-[0_8px_24px_rgba(43,65,140,0.05)]">
           <div className="max-h-[min(70vh,720px)] overflow-auto">
             {isLoadingGrid ? (
-              <div className="flex flex-col items-center justify-center gap-2 py-20 text-sm text-muted-foreground">
-                <Loader2 className="h-8 w-8 animate-spin opacity-60" />
-                Loading calendar…
+              <div className="space-y-3 p-4" aria-busy>
+                <span className="sr-only">Loading calendar</span>
+                {[...Array(6)].map((_, row) => (
+                  <div key={row} className="flex flex-wrap items-center gap-2">
+                    <Skeleton className="h-11 w-[min(100%,12rem)] shrink-0" />
+                    <div className="flex min-w-0 flex-1 gap-1 overflow-hidden">
+                      {[...Array(7)].map((_, c) => (
+                        <Skeleton key={c} className="h-8 w-8 shrink-0 rounded-md" />
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : totalCount === 0 ? (
               <div className="py-16 text-center text-sm text-muted-foreground">

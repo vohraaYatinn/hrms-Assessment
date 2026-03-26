@@ -1,5 +1,6 @@
 import { Outlet } from 'react-router-dom'
 import { AppSidebar, SidebarNavPanel } from './app-sidebar'
+import { InitialDataBanner } from './initial-data-banner'
 import { MobileNavProvider, useMobileNav } from './mobile-nav-context'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
 
@@ -18,6 +19,7 @@ function AppLayoutInner() {
         </SheetContent>
       </Sheet>
       <main className="min-h-screen lg:ml-56">
+        <InitialDataBanner />
         <Outlet />
       </main>
     </div>

@@ -70,6 +70,7 @@ export function EmployeesPage() {
     replaceEmployeesSnapshot,
     replaceAttendanceSnapshot,
     employees: globalEmployees,
+    initialDataStatus,
   } = useHRMS()
   const [employees, setEmployees] = useState<Employee[]>([])
   const [totalCount, setTotalCount] = useState(0)
@@ -79,7 +80,7 @@ export function EmployeesPage() {
     useState<ListDepartmentFilter>('__all__')
   const [searchQuery, setSearchQuery] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
-  const [isLoading, setIsLoading] = useState(true)
+  const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [showPurgeAllConfirm, setShowPurgeAllConfirm] = useState(false)
@@ -171,8 +172,9 @@ export function EmployeesPage() {
   ])
 
   useEffect(() => {
+    if (initialDataStatus !== 'ready') return
     void loadTable()
-  }, [loadTable])
+  }, [loadTable, initialDataStatus])
 
   useEffect(() => {
     if (typeof BroadcastChannel === 'undefined') return
@@ -350,11 +352,21 @@ export function EmployeesPage() {
 
   const employeeToDelete = employees.find((e) => e.id === deleteTarget)
 
+  const showTableSkeleton =
+    initialDataStatus === 'loading' ||
+    (initialDataStatus === 'ready' && isLoading)
+
   return (
     <div className="min-h-screen">
       <AppHeader
         title="Employees"
-        subtitle={`${globalEmployees.length} total employees`}
+        subtitle={
+          initialDataStatus === 'loading'
+            ? 'Loading…'
+            : initialDataStatus === 'error'
+              ? 'Could not load employee summary'
+              : `${globalEmployees.length} total employees`
+        }
       />
       <div className="p-4 sm:p-6">
         <CollapsibleFilterBar
@@ -452,7 +464,7 @@ export function EmployeesPage() {
         </CollapsibleFilterBar>
 
         <div className="overflow-hidden rounded-xl border border-[#dfe5f7] bg-white shadow-[0_8px_24px_rgba(43,65,140,0.05)]">
-          {isLoading ? (
+          {showTableSkeleton ? (
             <div className="p-4 space-y-4">
               {[...Array(5)].map((_, i) => (
                 <div key={i} className="flex items-center gap-4">

@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useEffect, type ReactNode } from 'react'
 import type { Employee, AttendanceRecord } from '@/lib/types'
-import { HRMSContext, type HRMSState, mockEmployees, mockAttendance, REFERENCE_DATE } from '@/lib/store'
+import { HRMSContext, type HRMSState } from '@/lib/store'
+import { isTimeoutError, withTimeout } from '@/lib/fetch-timeout'
 import {
   fetchEmployees,
   fetchAttendance,
@@ -11,6 +12,14 @@ import {
 } from '../../backend/api.js'
 
 const EMPLOYEES_SYNC_CHANNEL = 'hrms-employees-sync'
+const INITIAL_FETCH_TIMEOUT_MS = 30_000
+
+function initialLoadErrorMessage(error: unknown): string {
+  if (isTimeoutError(error)) {
+    return 'The server did not respond within 30 seconds. Check your internet connection or verify the HRMS backend is running.'
+  }
+  return 'Could not load HRMS data. Check your internet connection or verify the backend server is running.'
+}
 
 function postEmployeesSync() {
   try {
@@ -23,36 +32,41 @@ function postEmployeesSync() {
 }
 
 export function HRMSProvider({ children }: { children: ReactNode }) {
-  const [employees, setEmployees] = useState<Employee[]>(mockEmployees)
-  const [attendance, setAttendance] = useState<AttendanceRecord[]>(mockAttendance)
-  const [hasLoadedFromBackend, setHasLoadedFromBackend] = useState(false)
+  const [employees, setEmployees] = useState<Employee[]>([])
+  const [attendance, setAttendance] = useState<AttendanceRecord[]>([])
+  const [initialDataStatus, setInitialDataStatus] = useState<
+    'loading' | 'ready' | 'error'
+  >('loading')
+  const [initialDataError, setInitialDataError] = useState<string | null>(null)
 
-  useEffect(() => {
-    let mounted = true
-
-    async function loadInitialData() {
-      try {
-        const [remoteEmployees, remoteAttendance] = await Promise.all([
-          fetchEmployees(),
-          fetchAttendance(),
-        ])
-        if (!mounted) return
-        setEmployees(remoteEmployees)
-        setAttendance(remoteAttendance)
-      } catch {
-        // Keep mock data as fallback when backend is unavailable.
-      } finally {
-        if (mounted) {
-          setHasLoadedFromBackend(true)
-        }
-      }
-    }
-
-    void loadInitialData()
-    return () => {
-      mounted = false
+  const loadInitialData = useCallback(async () => {
+    setInitialDataStatus('loading')
+    setInitialDataError(null)
+    setEmployees([])
+    setAttendance([])
+    try {
+      const [remoteEmployees, remoteAttendance] = await Promise.all([
+        withTimeout(fetchEmployees(), INITIAL_FETCH_TIMEOUT_MS),
+        withTimeout(fetchAttendance(), INITIAL_FETCH_TIMEOUT_MS),
+      ])
+      setEmployees(remoteEmployees)
+      setAttendance(remoteAttendance)
+      setInitialDataStatus('ready')
+    } catch (e) {
+      setEmployees([])
+      setAttendance([])
+      setInitialDataError(initialLoadErrorMessage(e))
+      setInitialDataStatus('error')
     }
   }, [])
+
+  useEffect(() => {
+    void loadInitialData()
+  }, [loadInitialData])
+
+  const retryInitialData = useCallback(() => {
+    void loadInitialData()
+  }, [loadInitialData])
 
   useEffect(() => {
     if (typeof BroadcastChannel === 'undefined') return
@@ -61,11 +75,13 @@ export function HRMSProvider({ children }: { children: ReactNode }) {
       void (async () => {
         try {
           const [nextEmployees, nextAttendance] = await Promise.all([
-            fetchEmployees(),
-            fetchAttendance(),
+            withTimeout(fetchEmployees(), INITIAL_FETCH_TIMEOUT_MS),
+            withTimeout(fetchAttendance(), INITIAL_FETCH_TIMEOUT_MS),
           ])
           setEmployees(nextEmployees)
           setAttendance(nextAttendance)
+          setInitialDataStatus('ready')
+          setInitialDataError(null)
         } catch {
           /* keep existing */
         }
@@ -163,27 +179,22 @@ export function HRMSProvider({ children }: { children: ReactNode }) {
     [attendance]
   )
 
-  const todayDate = useMemo(() => {
-    if (!hasLoadedFromBackend) {
-      return REFERENCE_DATE
-    }
-    return new Date().toISOString().slice(0, 10)
-  }, [hasLoadedFromBackend])
-
   const getTodayAttendance = useCallback(() => {
+    const ymd = new Date().toISOString().slice(0, 10)
     return employees.map((employee) => {
       const record = attendance.find(
-        (a) => a.employeeId === employee.id && a.date === todayDate
+        (a) => a.employeeId === employee.id && a.date === ymd
       )
       return {
         employee,
         status: record?.status ?? ('unmarked' as const),
       }
     })
-  }, [employees, attendance, todayDate])
+  }, [employees, attendance])
 
   const getStats = useCallback(() => {
-    const todayRecords = attendance.filter((a) => a.date === todayDate)
+    const ymd = new Date().toISOString().slice(0, 10)
+    const todayRecords = attendance.filter((a) => a.date === ymd)
     const presentToday = todayRecords.filter((a) => a.status === 'present').length
     const absentToday = todayRecords.filter((a) => a.status === 'absent').length
     const totalEmployees = employees.length
@@ -198,12 +209,15 @@ export function HRMSProvider({ children }: { children: ReactNode }) {
       absentToday,
       attendanceRate,
     }
-  }, [employees, attendance, todayDate])
+  }, [employees, attendance])
 
   const value: HRMSState = useMemo(
     () => ({
       employees,
       attendance,
+      initialDataStatus,
+      initialDataError,
+      retryInitialData,
       replaceEmployeesSnapshot,
       replaceAttendanceSnapshot,
       addEmployee,
@@ -218,6 +232,9 @@ export function HRMSProvider({ children }: { children: ReactNode }) {
     [
       employees,
       attendance,
+      initialDataStatus,
+      initialDataError,
+      retryInitialData,
       replaceEmployeesSnapshot,
       replaceAttendanceSnapshot,
       addEmployee,
