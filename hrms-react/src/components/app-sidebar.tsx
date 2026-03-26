@@ -13,16 +13,16 @@ export function AppSidebar() {
   const { pathname } = useLocation()
 
   return (
-    <aside className="fixed left-0 top-0 z-40 h-screen w-56 bg-sidebar flex flex-col">
+    <aside className="fixed left-0 top-0 z-40 h-screen w-56 bg-sidebar flex flex-col shadow-[2px_0_8px_rgba(16,24,40,0.16)]">
       <div className="flex h-14 items-center gap-2.5 px-4 border-b border-sidebar-border">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
+        <div className="flex h-8 w-8 items-center justify-center rounded-md bg-[#f59e0b]">
           <span className="text-sm font-bold text-primary-foreground">H</span>
         </div>
-        <span className="text-base font-semibold text-sidebar-foreground">HRMS</span>
+        <span className="text-sm font-semibold text-sidebar-foreground">HRMS</span>
       </div>
 
       <div className="px-3 py-3">
-        <button type="button" className="flex w-full items-center gap-2.5 rounded-lg bg-sidebar-accent px-3 py-2.5 transition-colors hover:bg-sidebar-accent/80">
+        <button type="button" className="flex w-full items-center gap-2.5 rounded-md bg-sidebar-accent/80 px-3 py-2.5 transition-colors hover:bg-sidebar-accent">
           <Avatar className="h-8 w-8">
             <AvatarFallback className="bg-primary/20 text-primary text-xs font-medium">
               JD
@@ -45,10 +45,10 @@ export function AppSidebar() {
                 key={item.href}
                 to={item.href}
                 className={cn(
-                  'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+                  'flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium transition-colors',
                   isActive
-                    ? 'bg-sidebar-accent text-sidebar-foreground'
-                    : 'text-[color:var(--sidebar-muted)] hover:bg-sidebar-accent/60 hover:text-sidebar-foreground'
+                    ? 'bg-sidebar-accent text-sidebar-foreground shadow-[inset_2px_0_0_var(--color-primary)]'
+                    : 'text-[color:var(--sidebar-muted)] hover:bg-sidebar-accent/70 hover:text-sidebar-foreground'
                 )}
               >
                 <item.icon className="h-[18px] w-[18px]" />
@@ -62,7 +62,7 @@ export function AppSidebar() {
       <div className="px-3 pb-4">
         <a
           href="#"
-          className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-[color:var(--sidebar-muted)] transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+          className="flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium text-[color:var(--sidebar-muted)] transition-colors hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
         >
           <Settings className="h-[18px] w-[18px]" />
           Settings
