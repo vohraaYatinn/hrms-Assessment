@@ -10,6 +10,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from attendance.models import Attendance, AttendanceStatus
+from attendance.serializers import ATTENDANCE_STALE_STATUS_MESSAGE
 from employees.models import Department, Employee
 
 
@@ -67,6 +68,21 @@ class AttendanceAPITestCase(APITestCase):
         body = response.json()
         self.assertFalse(body["success"])
         self.assertEqual(body["error"]["code"], "VALIDATION_ERROR")
+
+    def test_mark_attendance_future_date_rejected(self):
+        """Attendance cannot be created for a calendar date after today."""
+        future = timezone.localdate() + timedelta(days=1)
+        payload = {
+            "employee": self.employee.pk,
+            "date": str(future),
+            "status": AttendanceStatus.PRESENT,
+        }
+        response = self.client.post(self.list_url, payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        body = response.json()
+        self.assertFalse(body["success"])
+        self.assertEqual(body["error"]["code"], "VALIDATION_ERROR")
+        self.assertIn("future", body["error"]["message"].lower())
 
     def test_today_summary(self):
         """``today_summary`` reflects counts for the current local date."""
@@ -157,6 +173,20 @@ class AttendanceAPITestCase(APITestCase):
         self.assertEqual(body["data"]["created"], 2)
         self.assertEqual(Attendance.objects.filter(date=today).count(), 2)
 
+    def test_bulk_future_date_rejected(self):
+        """Bulk attendance cannot target a future calendar date."""
+        future = timezone.localdate() + timedelta(days=1)
+        payload = {
+            "date": str(future),
+            "status": AttendanceStatus.PRESENT,
+            "employee_ids": [self.employee.pk],
+        }
+        response = self.client.post(self.bulk_url, payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        body = response.json()
+        self.assertFalse(body["success"])
+        self.assertIn("future", body["error"]["message"].lower())
+
     def test_bulk_updates_existing(self):
         """Bulk overwrites status when a row already exists for that employee and date."""
         today = timezone.localdate()
@@ -176,6 +206,54 @@ class AttendanceAPITestCase(APITestCase):
         self.assertTrue(body["success"])
         self.assertEqual(body["data"]["created"], 0)
         self.assertEqual(body["data"]["updated"], 1)
+        row = Attendance.objects.get(employee=self.employee, date=today)
+        self.assertEqual(row.status, AttendanceStatus.ABSENT)
+
+    def test_bulk_rejects_stale_expected_status(self):
+        """Bulk with employee_expectations fails when the server state drifted."""
+        today = timezone.localdate()
+        Attendance.objects.create(
+            employee=self.employee,
+            date=today,
+            status=AttendanceStatus.ABSENT,
+        )
+        payload = {
+            "date": str(today),
+            "status": AttendanceStatus.ABSENT,
+            "employee_ids": [self.employee.pk],
+            "employee_expectations": [
+                {
+                    "employee_id": self.employee.pk,
+                    "expected_current_status": AttendanceStatus.PRESENT,
+                }
+            ],
+        }
+        response = self.client.post(self.bulk_url, payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        body = response.json()
+        self.assertFalse(body["success"])
+        self.assertIn(ATTENDANCE_STALE_STATUS_MESSAGE, body["error"]["message"])
+
+    def test_bulk_with_expectations_succeeds_when_state_matches(self):
+        today = timezone.localdate()
+        Attendance.objects.create(
+            employee=self.employee,
+            date=today,
+            status=AttendanceStatus.PRESENT,
+        )
+        payload = {
+            "date": str(today),
+            "status": AttendanceStatus.ABSENT,
+            "employee_ids": [self.employee.pk],
+            "employee_expectations": [
+                {
+                    "employee_id": self.employee.pk,
+                    "expected_current_status": AttendanceStatus.PRESENT,
+                }
+            ],
+        }
+        response = self.client.post(self.bulk_url, payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
         row = Attendance.objects.get(employee=self.employee, date=today)
         self.assertEqual(row.status, AttendanceStatus.ABSENT)
 

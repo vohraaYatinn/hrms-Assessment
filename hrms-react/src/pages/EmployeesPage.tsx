@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Plus, Search, Sparkles, Trash2, Users, MoreHorizontal, Pencil } from 'lucide-react'
 import { toast } from 'sonner'
 import { AppHeader } from '@/components/app-header'
+import { CollapsibleFilterBar } from '@/components/collapsible-filter-bar'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -40,6 +42,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  EMPLOYEE_EMAIL_MAX,
+  EMPLOYEE_FULL_NAME_MAX,
+  validateEmployeeEmail,
+  validateEmployeeFullName,
+} from '@/lib/employee-form-validation'
 import { DEPARTMENTS, type Department, type Employee } from '@/lib/types'
 import { useHRMS } from '@/lib/store'
 import {
@@ -79,6 +87,7 @@ export function EmployeesPage() {
   const [demoCount, setDemoCount] = useState('10')
   const [isDemoLoading, setIsDemoLoading] = useState(false)
   const [isPurgeLoading, setIsPurgeLoading] = useState(false)
+  const [isDeletingOne, setIsDeletingOne] = useState(false)
   const [showFormModal, setShowFormModal] = useState(false)
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null)
   const [formData, setFormData] = useState({
@@ -93,6 +102,8 @@ export function EmployeesPage() {
   }>({})
   const submitGuardRef = useRef(false)
   const purgeGuardRef = useRef(false)
+  const deleteGuardRef = useRef(false)
+  const demoGuardRef = useRef(false)
   const syncChannelRef = useRef<BroadcastChannel | null>(null)
   const skipSearchPageResetRef = useRef(true)
 
@@ -191,6 +202,9 @@ export function EmployeesPage() {
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
   const hasActiveListFilters =
     debouncedSearch.trim() !== '' || listDepartmentFilter !== '__all__'
+  const listFilterActiveCount =
+    (debouncedSearch.trim() !== '' ? 1 : 0) +
+    (listDepartmentFilter !== '__all__' ? 1 : 0)
 
   const openAddModal = () => {
     setEditingEmployee(null)
@@ -212,18 +226,11 @@ export function EmployeesPage() {
 
   const validateForm = () => {
     const nextErrors: typeof errors = {}
-    const fullName = formData.fullName.trim()
-    const email = formData.email.trim().toLowerCase()
+    const fullNameErr = validateEmployeeFullName(formData.fullName)
+    if (fullNameErr) nextErrors.fullName = fullNameErr
 
-    if (!fullName) {
-      nextErrors.fullName = 'Full name is required'
-    }
-
-    if (!email) {
-      nextErrors.email = 'Email is required'
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      nextErrors.email = 'Please enter a valid email'
-    }
+    const emailErr = validateEmployeeEmail(formData.email)
+    if (emailErr) nextErrors.email = emailErr
 
     if (!formData.department) {
       nextErrors.department = 'Department is required'
@@ -267,26 +274,32 @@ export function EmployeesPage() {
   }
 
   const handleDelete = async () => {
-    if (deleteTarget) {
-      try {
-        await removeEmployee(deleteTarget)
-        toast.success('Employee deleted successfully')
-        setDeleteTarget(null)
-        await refreshAfterMutation()
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to delete employee'
-        toast.error(message)
-      }
+    if (!deleteTarget || deleteGuardRef.current) return
+    deleteGuardRef.current = true
+    setIsDeletingOne(true)
+    try {
+      await removeEmployee(deleteTarget)
+      toast.success('Employee deleted successfully')
+      setDeleteTarget(null)
+      await refreshAfterMutation()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to delete employee'
+      toast.error(message)
+    } finally {
+      setIsDeletingOne(false)
+      deleteGuardRef.current = false
     }
   }
 
   const handleAddDemo = async () => {
+    if (demoGuardRef.current) return
     const parsed = Number.parseInt(demoCount.trim(), 10)
     if (!Number.isFinite(parsed) || parsed < 1) {
       toast.error('Enter a whole number from 1 to 200.')
       return
     }
     const n = Math.min(200, Math.max(1, parsed))
+    demoGuardRef.current = true
     setIsDemoLoading(true)
     try {
       const result = await createDemoEmployees(n)
@@ -302,6 +315,7 @@ export function EmployeesPage() {
       toast.error(message)
     } finally {
       setIsDemoLoading(false)
+      demoGuardRef.current = false
     }
   }
 
@@ -341,26 +355,20 @@ export function EmployeesPage() {
       <AppHeader
         title="Employees"
         subtitle={`${globalEmployees.length} total employees`}
-        action={
-          <Button
-            onClick={openAddModal}
-            size="sm"
-            className="h-9 rounded-md bg-[#2b418c] px-3 text-primary-foreground hover:bg-[#243777]"
-          >
-            <Plus className="mr-1.5 h-3.5 w-3.5" />
-            Add Employee
-          </Button>
-        }
       />
-      <div className="p-6">
-        <div className="mb-4 flex flex-wrap items-center gap-3">
-          <div className="relative flex-1 max-w-sm">
+      <div className="p-4 sm:p-6">
+        <CollapsibleFilterBar
+          activeCount={listFilterActiveCount}
+          className="mb-4"
+          label="Search & filters"
+        >
+          <div className="relative w-full min-w-0 md:max-w-sm md:flex-1">
             <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               placeholder="Search name, email, or ID…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-9 rounded-lg border-[#d8deef] bg-white pl-9 shadow-none focus-visible:ring-2 focus-visible:ring-[#2b418c]/20"
+              className="h-9 w-full rounded-lg border-[#d8deef] bg-white pl-9 shadow-none focus-visible:ring-2 focus-visible:ring-[#2b418c]/20"
             />
           </div>
           <Select
@@ -370,7 +378,7 @@ export function EmployeesPage() {
               setPage(1)
             }}
           >
-            <SelectTrigger className="h-9 w-[min(100%,11rem)] rounded-lg border-[#d8deef] bg-white shadow-none">
+            <SelectTrigger className="h-9 w-full rounded-lg border-[#d8deef] bg-white shadow-none md:w-[min(100%,11rem)]">
               <SelectValue placeholder="Department" />
             </SelectTrigger>
             <SelectContent>
@@ -389,7 +397,7 @@ export function EmployeesPage() {
               setPage(1)
             }}
           >
-            <SelectTrigger className="h-9 w-[4.5rem] rounded-lg border-[#d8deef] bg-white shadow-none">
+            <SelectTrigger className="h-9 w-full rounded-lg border-[#d8deef] bg-white shadow-none md:w-[4.5rem]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -398,18 +406,30 @@ export function EmployeesPage() {
               <SelectItem value="50">50</SelectItem>
             </SelectContent>
           </Select>
-          <Badge variant="secondary" className="h-9 border-[#dfe5f7] bg-white px-3 font-normal text-[#2b418c]">
+          <Badge
+            variant="secondary"
+            className="h-9 w-fit border-[#dfe5f7] bg-white px-3 font-normal text-[#2b418c]"
+          >
             {totalCount} results
           </Badge>
-          <Badge className="h-9 border-[#ead8a2] bg-[#fff8df] px-3 font-medium text-[#7a621e]">
+          <Badge className="h-9 w-fit border-[#ead8a2] bg-[#fff8df] px-3 font-medium text-[#7a621e]">
             Employee Directory
           </Badge>
-          <div className="flex w-full flex-wrap gap-2 sm:ml-auto sm:w-auto">
+          <div className="flex w-full flex-wrap gap-2 md:ml-auto md:w-auto">
+            <Button
+              type="button"
+              size="sm"
+              className="h-9 flex-1 bg-[#2b418c] text-white hover:bg-[#243a75] sm:flex-none"
+              onClick={openAddModal}
+            >
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+              Add employee
+            </Button>
             <Button
               type="button"
               variant="outline"
               size="sm"
-              className="h-9 border-[#d8deef] bg-white text-[#2b418c] hover:bg-[#f4f6fc]"
+              className="h-9 flex-1 border-[#d8deef] bg-white text-[#2b418c] hover:bg-[#f4f6fc] sm:flex-none"
               onClick={() => {
                 setDemoCount('10')
                 setShowDemoModal(true)
@@ -422,14 +442,14 @@ export function EmployeesPage() {
               type="button"
               variant="outline"
               size="sm"
-              className="h-9 border-destructive/40 bg-white text-destructive hover:bg-destructive/5"
+              className="h-9 flex-1 border-destructive/40 bg-white text-destructive hover:bg-destructive/5 sm:flex-none"
               onClick={() => setShowPurgeAllConfirm(true)}
               disabled={globalEmployees.length === 0}
             >
               Delete all
             </Button>
           </div>
-        </div>
+        </CollapsibleFilterBar>
 
         <div className="overflow-hidden rounded-xl border border-[#dfe5f7] bg-white shadow-[0_8px_24px_rgba(43,65,140,0.05)]">
           {isLoading ? (
@@ -471,53 +491,135 @@ export function EmployeesPage() {
               )}
             </Empty>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead className="text-muted-foreground">Employee</TableHead>
-                  <TableHead className="text-muted-foreground">ID</TableHead>
-                  <TableHead className="text-muted-foreground">Email</TableHead>
-                  <TableHead className="text-muted-foreground">Department</TableHead>
-                  <TableHead className="w-16 text-muted-foreground"></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+            <>
+              <div className="hidden md:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead>Employee</TableHead>
+                      <TableHead>ID</TableHead>
+                      <TableHead>Email</TableHead>
+                      <TableHead>Department</TableHead>
+                      <TableHead className="w-16" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {employees.map((employee) => (
+                      <TableRow
+                        key={employee.id}
+                        className="group hover:bg-[#f7f9ff]"
+                      >
+                        <TableCell>
+                          <div className="flex items-center gap-3">
+                            <Avatar className="h-8 w-8 border border-[#d9e1f4]">
+                              <AvatarFallback className="bg-[#edf2ff] text-[#2b418c] text-xs font-medium">
+                                {getInitials(employee.fullName)}
+                              </AvatarFallback>
+                            </Avatar>
+                            <Link
+                              to={`/employees/${employee.id}`}
+                              className="rounded-sm text-sm font-medium text-[#2b418c] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2b418c]/30"
+                            >
+                              {employee.fullName}
+                            </Link>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <code className="rounded bg-[#f1f4ff] px-1.5 py-0.5 font-mono text-xs text-[#4d5e94]">
+                            {employee.employeeId}
+                          </code>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm text-muted-foreground">
+                            {employee.email}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant="secondary"
+                            className="border-[#dfe5f7] bg-[#f4f7ff] font-normal text-xs text-[#405186]"
+                          >
+                            {employee.department}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 rounded-md opacity-100 transition-opacity hover:bg-[#eef3ff] hover:text-[#2b418c] md:opacity-0 md:group-hover:opacity-100"
+                              >
+                                <MoreHorizontal className="h-4 w-4" />
+                                <span className="sr-only">Actions for {employee.fullName}</span>
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-48">
+                              <DropdownMenuItem
+                                className="text-sm"
+                                onClick={() => openEditModal(employee)}
+                              >
+                                <Pencil className="mr-2 h-4 w-4" />
+                                Edit Employee
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                className="text-sm text-destructive focus:text-destructive"
+                                onClick={() => setDeleteTarget(employee.id)}
+                              >
+                                <Trash2 className="mr-2 h-4 w-4" />
+                                Delete Employee
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              <ul className="space-y-3 p-3 md:hidden" aria-label="Employee list">
                 {employees.map((employee) => (
-                  <TableRow key={employee.id} className="group">
-                    <TableCell>
-                      <div className="flex items-center gap-3">
-                        <Avatar className="h-8 w-8 border border-[#d9e1f4]">
-                          <AvatarFallback className="bg-[#edf2ff] text-[#2b418c] text-xs font-medium">
-                            {getInitials(employee.fullName)}
-                          </AvatarFallback>
-                        </Avatar>
-                        <span className="text-sm font-medium text-foreground">
+                  <li
+                    key={employee.id}
+                    className="rounded-xl border border-[#dfe5f7] bg-[#fafbff] p-4 shadow-sm"
+                  >
+                    <div className="flex items-start gap-3">
+                      <Avatar className="h-10 w-10 shrink-0 border border-[#d9e1f4]">
+                        <AvatarFallback className="bg-[#edf2ff] text-[#2b418c] text-xs font-medium">
+                          {getInitials(employee.fullName)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="min-w-0 flex-1">
+                        <Link
+                          to={`/employees/${employee.id}`}
+                          className="text-sm font-semibold text-[#2b418c] underline-offset-2 hover:underline"
+                        >
                           {employee.fullName}
-                        </span>
+                        </Link>
+                        <p className="mt-1 break-all text-xs text-muted-foreground">
+                          {employee.email}
+                        </p>
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <code className="rounded bg-[#f1f4ff] px-1.5 py-0.5 font-mono text-xs text-[#4d5e94]">
+                            {employee.employeeId}
+                          </code>
+                          <Badge
+                            variant="secondary"
+                            className="border-[#dfe5f7] bg-white font-normal text-xs text-[#405186]"
+                          >
+                            {employee.department}
+                          </Badge>
+                        </div>
                       </div>
-                    </TableCell>
-                    <TableCell>
-                      <code className="rounded bg-[#f1f4ff] px-1.5 py-0.5 font-mono text-xs text-[#4d5e94]">
-                        {employee.employeeId}
-                      </code>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-muted-foreground">
-                        {employee.email}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="secondary" className="border-[#dfe5f7] bg-[#f4f7ff] font-normal text-xs text-[#405186]">
-                        {employee.department}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button
+                            type="button"
                             variant="ghost"
                             size="icon"
-                            className="h-8 w-8 rounded-md opacity-0 transition-opacity group-hover:opacity-100 hover:bg-[#eef3ff] hover:text-[#2b418c]"
+                            className="h-9 w-9 shrink-0 rounded-md hover:bg-[#eef3ff] hover:text-[#2b418c]"
                           >
                             <MoreHorizontal className="h-4 w-4" />
                             <span className="sr-only">Actions for {employee.fullName}</span>
@@ -541,11 +643,11 @@ export function EmployeesPage() {
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
+                    </div>
+                  </li>
                 ))}
-              </TableBody>
-            </Table>
+              </ul>
+            </>
           )}
           {!isLoading && employees.length > 0 && (
             <div className="flex flex-col gap-3 border-t border-[#dfe5f7] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
@@ -604,6 +706,7 @@ export function EmployeesPage() {
               <Input
                 id="fullName"
                 value={formData.fullName}
+                maxLength={EMPLOYEE_FULL_NAME_MAX}
                 onChange={(e) =>
                   setFormData((prev) => ({ ...prev, fullName: e.target.value }))
                 }
@@ -613,6 +716,9 @@ export function EmployeesPage() {
               {errors.fullName && (
                 <p className="text-xs text-destructive">{errors.fullName}</p>
               )}
+              <p className="text-xs text-muted-foreground">
+                {formData.fullName.length}/{EMPLOYEE_FULL_NAME_MAX} · letters and spaces only
+              </p>
             </div>
 
             <div className="space-y-2">
@@ -623,6 +729,7 @@ export function EmployeesPage() {
                 id="email"
                 type="email"
                 value={formData.email}
+                maxLength={EMPLOYEE_EMAIL_MAX}
                 onChange={(e) =>
                   setFormData((prev) => ({ ...prev, email: e.target.value }))
                 }
@@ -632,6 +739,9 @@ export function EmployeesPage() {
               {errors.email && (
                 <p className="text-xs text-destructive">{errors.email}</p>
               )}
+              <p className="text-xs text-muted-foreground">
+                {formData.email.length}/{EMPLOYEE_EMAIL_MAX}
+              </p>
             </div>
 
             <div className="space-y-2">
@@ -746,6 +856,7 @@ export function EmployeesPage() {
         title="Delete all employees?"
         description="This removes every employee from the database. Related attendance records are removed as well. This cannot be undone."
         confirmLabel={isPurgeLoading ? 'Deleting…' : 'Delete all'}
+        pending={isPurgeLoading}
         onConfirm={() => {
           void handlePurgeAll()
         }}
@@ -754,10 +865,11 @@ export function EmployeesPage() {
 
       <ConfirmDialog
         open={!!deleteTarget}
-        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        onOpenChange={(open) => !open && !isDeletingOne && setDeleteTarget(null)}
         title="Delete Employee"
         description={`Are you sure you want to delete ${employeeToDelete?.fullName}? This action cannot be undone.`}
-        confirmLabel="Delete"
+        confirmLabel={isDeletingOne ? 'Deleting…' : 'Delete'}
+        pending={isDeletingOne}
         onConfirm={() => {
           void handleDelete()
         }}

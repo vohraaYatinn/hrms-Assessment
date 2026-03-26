@@ -1,5 +1,5 @@
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -20,6 +20,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import {
+  EMPLOYEE_EMAIL_MAX,
+  EMPLOYEE_FULL_NAME_MAX,
+  validateEmployeeEmail,
+  validateEmployeeFullName,
+} from '@/lib/employee-form-validation'
 import { useHRMS } from '@/lib/store'
 import { type Department, DEPARTMENTS } from '@/lib/types'
 
@@ -37,6 +43,7 @@ interface FormErrors {
 export function AddEmployeeModal({ open, onOpenChange }: AddEmployeeModalProps) {
   const { addEmployee } = useHRMS()
   const [loading, setLoading] = useState(false)
+  const submitGuardRef = useRef(false)
   const [errors, setErrors] = useState<FormErrors>({})
   
   const [formData, setFormData] = useState({
@@ -47,36 +54,30 @@ export function AddEmployeeModal({ open, onOpenChange }: AddEmployeeModalProps) 
 
   const validateForm = (): boolean => {
     const newErrors: FormErrors = {}
-
-    if (!formData.fullName.trim()) {
-      newErrors.fullName = 'Full name is required'
-    }
-
-    if (!formData.email.trim()) {
-      newErrors.email = 'Email is required'
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
-      newErrors.email = 'Please enter a valid email'
-    }
-
+    const fullNameErr = validateEmployeeFullName(formData.fullName)
+    if (fullNameErr) newErrors.fullName = fullNameErr
+    const emailErr = validateEmployeeEmail(formData.email)
+    if (emailErr) newErrors.email = emailErr
     if (!formData.department) {
       newErrors.department = 'Department is required'
     }
-
     setErrors(newErrors)
     return Object.keys(newErrors).length === 0
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
+
+    if (submitGuardRef.current) return
     if (!validateForm()) return
 
+    submitGuardRef.current = true
     setLoading(true)
 
     try {
       await addEmployee({
         fullName: formData.fullName.trim(),
-        email: formData.email.trim(),
+        email: formData.email.trim().toLowerCase(),
         department: formData.department as Department,
       })
 
@@ -88,10 +89,12 @@ export function AddEmployeeModal({ open, onOpenChange }: AddEmployeeModalProps) 
       toast.error('Failed to add employee')
     } finally {
       setLoading(false)
+      submitGuardRef.current = false
     }
   }
 
   const handleClose = (isOpen: boolean) => {
+    if (!isOpen && loading) return
     if (!isOpen) {
       setFormData({ fullName: '', email: '', department: '' })
       setErrors({})
@@ -113,8 +116,9 @@ export function AddEmployeeModal({ open, onOpenChange }: AddEmployeeModalProps) 
             <Label htmlFor="fullName" className="text-sm text-foreground">Full Name</Label>
             <Input
               id="fullName"
-              placeholder="e.g., John Doe"
+              placeholder="e.g., Yatin Vohra"
               value={formData.fullName}
+              maxLength={EMPLOYEE_FULL_NAME_MAX}
               onChange={(e) =>
                 setFormData((prev) => ({ ...prev, fullName: e.target.value }))
               }
@@ -124,6 +128,9 @@ export function AddEmployeeModal({ open, onOpenChange }: AddEmployeeModalProps) 
             {errors.fullName && (
               <p className="text-xs text-destructive">{errors.fullName}</p>
             )}
+            <p className="text-xs text-muted-foreground">
+              {formData.fullName.length}/{EMPLOYEE_FULL_NAME_MAX} · letters and spaces only
+            </p>
           </div>
 
           <div className="space-y-2">
@@ -133,6 +140,7 @@ export function AddEmployeeModal({ open, onOpenChange }: AddEmployeeModalProps) 
               type="email"
               placeholder="e.g., john.doe@company.com"
               value={formData.email}
+              maxLength={EMPLOYEE_EMAIL_MAX}
               onChange={(e) =>
                 setFormData((prev) => ({ ...prev, email: e.target.value }))
               }
@@ -142,6 +150,9 @@ export function AddEmployeeModal({ open, onOpenChange }: AddEmployeeModalProps) 
             {errors.email && (
               <p className="text-xs text-destructive">{errors.email}</p>
             )}
+            <p className="text-xs text-muted-foreground">
+              {formData.email.length}/{EMPLOYEE_EMAIL_MAX}
+            </p>
           </div>
 
           <div className="space-y-2">

@@ -20,6 +20,8 @@ interface ConfirmDialogProps {
   cancelLabel?: string
   onConfirm: () => void
   variant?: 'default' | 'destructive'
+  /** Disables footer actions while an async confirm handler is in flight */
+  pending?: boolean
 }
 
 export function ConfirmDialog({
@@ -31,6 +33,7 @@ export function ConfirmDialog({
   cancelLabel = 'Cancel',
   onConfirm,
   variant = 'default',
+  pending = false,
 }: ConfirmDialogProps) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -42,10 +45,14 @@ export function ConfirmDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel className="text-muted-foreground hover:text-foreground bg-transparent border-border hover:bg-secondary">
+          <AlertDialogCancel
+            disabled={pending}
+            className="text-muted-foreground hover:text-foreground bg-transparent border-border hover:bg-secondary"
+          >
             {cancelLabel}
           </AlertDialogCancel>
           <AlertDialogAction
+            disabled={pending}
             onClick={onConfirm}
             className={cn(
               variant === 'destructive'

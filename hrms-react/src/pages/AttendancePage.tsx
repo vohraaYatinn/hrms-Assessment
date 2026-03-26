@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
-import { format } from 'date-fns'
+import { Link, useNavigate } from 'react-router-dom'
+import { format, isAfter, startOfDay } from 'date-fns'
 import { toast } from 'sonner'
 import {
   Search,
@@ -10,8 +11,11 @@ import {
   Loader2,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  Trash2,
 } from 'lucide-react'
 import { AppHeader } from '@/components/app-header'
+import { CollapsibleFilterBar } from '@/components/collapsible-filter-bar'
 import { AttendanceSubNav } from '@/components/attendance-subnav'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -54,6 +58,7 @@ import {
   fetchAllEmployeesMatching,
   fetchAttendance,
   fetchEmployeesPage,
+  removeAttendance,
 } from '../../backend/api.js'
 import {
   AlertDialog,
@@ -66,10 +71,17 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 
 type ListDepartmentFilter = Department | '__all__'
+type RosterAttendanceFilter = '__all__' | 'present' | 'absent'
+
+function isFutureAttendanceDate(d: Date): boolean {
+  return isAfter(startOfDay(d), startOfDay(new Date()))
+}
 
 export function AttendancePage() {
+  const navigate = useNavigate()
   const {
     employees,
     attendance,
@@ -77,10 +89,17 @@ export function AttendancePage() {
     syncAttendanceForDate,
     replaceAttendanceSnapshot,
   } = useHRMS()
+  const [clearAttendanceTarget, setClearAttendanceTarget] = useState<{
+    recordId: string
+    employeeName: string
+  } | null>(null)
+  const [isClearAttendanceLoading, setIsClearAttendanceLoading] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [listDepartmentFilter, setListDepartmentFilter] =
     useState<ListDepartmentFilter>('__all__')
+  const [rosterAttendanceFilter, setRosterAttendanceFilter] =
+    useState<RosterAttendanceFilter>('__all__')
   const [attendanceDate, setAttendanceDate] = useState<Date>(new Date())
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
@@ -94,9 +113,27 @@ export function AttendancePage() {
   const [demoPastStatus, setDemoPastStatus] = useState<'present' | 'absent'>('present')
   const [isDemoPastLoading, setIsDemoPastLoading] = useState(false)
   const [isPurgeAttendanceLoading, setIsPurgeAttendanceLoading] = useState(false)
+  const [mobileBulkOpen, setMobileBulkOpen] = useState(false)
+  const [demoAttendanceOpen, setDemoAttendanceOpen] = useState(true)
   const skipSearchPageResetRef = useRef(true)
+  const savingGuardRef = useRef(false)
+  const clearAttendanceGuardRef = useRef(false)
+  const selectAllGuardRef = useRef(false)
+  const demoPastGuardRef = useRef(false)
+  const purgeAttendanceGuardRef = useRef(false)
 
   const dateStr = format(attendanceDate, 'yyyy-MM-dd')
+  const isWorkingDateFuture = useMemo(
+    () => isFutureAttendanceDate(attendanceDate),
+    [attendanceDate],
+  )
+
+  useEffect(() => {
+    const today = startOfDay(new Date())
+    if (isAfter(startOfDay(attendanceDate), today)) {
+      setAttendanceDate(today)
+    }
+  }, [attendanceDate])
 
   useEffect(() => {
     void syncAttendanceForDate(dateStr)
@@ -105,7 +142,7 @@ export function AttendancePage() {
   useEffect(() => {
     setPage(1)
     setSelectedIds(new Set())
-  }, [dateStr])
+  }, [dateStr, rosterAttendanceFilter])
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebouncedSearch(searchQuery), 300)
@@ -130,6 +167,12 @@ export function AttendancePage() {
         department:
           listDepartmentFilter === '__all__' ? undefined : listDepartmentFilter,
         ordering: 'full_name,employee_id',
+        ...(rosterAttendanceFilter === '__all__'
+          ? {}
+          : {
+              attendanceDate: dateStr,
+              attendanceStatus: rosterAttendanceFilter,
+            }),
       })
       setRosterEmployees(rows)
       setTotalCount(count)
@@ -138,7 +181,14 @@ export function AttendancePage() {
     } finally {
       setIsRosterLoading(false)
     }
-  }, [page, pageSize, debouncedSearch, listDepartmentFilter])
+  }, [
+    page,
+    pageSize,
+    debouncedSearch,
+    listDepartmentFilter,
+    rosterAttendanceFilter,
+    dateStr,
+  ])
 
   useEffect(() => {
     void loadRosterPage()
@@ -176,7 +226,13 @@ export function AttendancePage() {
   const rangeEnd = Math.min(safePage * pageSize, totalCount)
 
   const hasActiveListFilters =
-    debouncedSearch.trim() !== '' || listDepartmentFilter !== '__all__'
+    debouncedSearch.trim() !== '' ||
+    listDepartmentFilter !== '__all__' ||
+    rosterAttendanceFilter !== '__all__'
+  const listFilterActiveCount =
+    (debouncedSearch.trim() !== '' ? 1 : 0) +
+    (listDepartmentFilter !== '__all__' ? 1 : 0) +
+    (rosterAttendanceFilter !== '__all__' ? 1 : 0)
 
   const getInitials = (name: string) =>
     name
@@ -196,7 +252,13 @@ export function AttendancePage() {
   }
 
   const toggleSelectAllMatching = useCallback(async () => {
-    if (totalCount === 0 || isSelectAllLoading || isRosterLoading) return
+    if (
+      totalCount === 0 ||
+      isSelectAllLoading ||
+      isRosterLoading ||
+      selectAllGuardRef.current
+    )
+      return
 
     let clearedWithoutFetch = false
     setSelectedIds((prev) => {
@@ -208,24 +270,34 @@ export function AttendancePage() {
     })
     if (clearedWithoutFetch) return
 
+    selectAllGuardRef.current = true
     setIsSelectAllLoading(true)
     try {
       const all = await fetchAllEmployeesMatching({
         search: debouncedSearch,
         department:
           listDepartmentFilter === '__all__' ? undefined : listDepartmentFilter,
+        ...(rosterAttendanceFilter === '__all__'
+          ? {}
+          : {
+              attendanceDate: dateStr,
+              attendanceStatus: rosterAttendanceFilter,
+            }),
       })
       setSelectedIds(new Set(all.map((e) => e.id)))
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not load employees to select.')
     } finally {
       setIsSelectAllLoading(false)
+      selectAllGuardRef.current = false
     }
   }, [
+    dateStr,
     debouncedSearch,
     isRosterLoading,
     isSelectAllLoading,
     listDepartmentFilter,
+    rosterAttendanceFilter,
     totalCount,
   ])
 
@@ -235,6 +307,12 @@ export function AttendancePage() {
       employeeIds?: string[]
       successMessage: string
     }) => {
+      if (isFutureAttendanceDate(attendanceDate)) {
+        toast.error('Attendance cannot be recorded for a future date.')
+        return
+      }
+      if (savingGuardRef.current) return
+      savingGuardRef.current = true
       setIsSaving(true)
       try {
         await bulkMarkAttendance({
@@ -249,18 +327,31 @@ export function AttendancePage() {
         toast.error(e instanceof Error ? e.message : 'Could not save attendance.')
       } finally {
         setIsSaving(false)
+        savingGuardRef.current = false
       }
     },
-    [bulkMarkAttendance, dateStr, loadRosterPage],
+    [attendanceDate, bulkMarkAttendance, dateStr, loadRosterPage],
   )
 
   const runBulkUnmarkedMatchingPresent = useCallback(async () => {
+    if (isFutureAttendanceDate(attendanceDate)) {
+      toast.error('Attendance cannot be recorded for a future date.')
+      return
+    }
+    if (savingGuardRef.current) return
+    savingGuardRef.current = true
     setIsSaving(true)
     try {
       const all = await fetchAllEmployeesMatching({
         search: debouncedSearch,
         department:
           listDepartmentFilter === '__all__' ? undefined : listDepartmentFilter,
+        ...(rosterAttendanceFilter === '__all__'
+          ? {}
+          : {
+              attendanceDate: dateStr,
+              attendanceStatus: rosterAttendanceFilter,
+            }),
       })
       const ids = all.filter((e) => !dayMap.has(e.id)).map((e) => e.id)
       if (ids.length === 0) {
@@ -279,23 +370,38 @@ export function AttendancePage() {
       toast.error(e instanceof Error ? e.message : 'Could not save attendance.')
     } finally {
       setIsSaving(false)
+      savingGuardRef.current = false
     }
   }, [
+    attendanceDate,
     bulkMarkAttendance,
     dateStr,
     dayMap,
     debouncedSearch,
     listDepartmentFilter,
     loadRosterPage,
+    rosterAttendanceFilter,
   ])
 
   const runBulkUnmarkedMatchingAbsent = useCallback(async () => {
+    if (isFutureAttendanceDate(attendanceDate)) {
+      toast.error('Attendance cannot be recorded for a future date.')
+      return
+    }
+    if (savingGuardRef.current) return
+    savingGuardRef.current = true
     setIsSaving(true)
     try {
       const all = await fetchAllEmployeesMatching({
         search: debouncedSearch,
         department:
           listDepartmentFilter === '__all__' ? undefined : listDepartmentFilter,
+        ...(rosterAttendanceFilter === '__all__'
+          ? {}
+          : {
+              attendanceDate: dateStr,
+              attendanceStatus: rosterAttendanceFilter,
+            }),
       })
       const ids = all.filter((e) => !dayMap.has(e.id)).map((e) => e.id)
       if (ids.length === 0) {
@@ -314,14 +420,17 @@ export function AttendancePage() {
       toast.error(e instanceof Error ? e.message : 'Could not save attendance.')
     } finally {
       setIsSaving(false)
+      savingGuardRef.current = false
     }
   }, [
+    attendanceDate,
     bulkMarkAttendance,
     dateStr,
     dayMap,
     debouncedSearch,
     listDepartmentFilter,
     loadRosterPage,
+    rosterAttendanceFilter,
   ])
 
   const allMatchingSelected =
@@ -340,22 +449,44 @@ export function AttendancePage() {
     return rec.status
   }
 
+  const handleClearAttendance = useCallback(async () => {
+    const target = clearAttendanceTarget
+    if (!target || clearAttendanceGuardRef.current) return
+    clearAttendanceGuardRef.current = true
+    setIsClearAttendanceLoading(true)
+    try {
+      await removeAttendance(target.recordId)
+      toast.success(`Cleared attendance for ${target.employeeName}.`)
+      setClearAttendanceTarget(null)
+      await syncAttendanceForDate(dateStr)
+      await loadRosterPage()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not clear attendance.')
+    } finally {
+      setIsClearAttendanceLoading(false)
+      clearAttendanceGuardRef.current = false
+    }
+  }, [clearAttendanceTarget, syncAttendanceForDate, dateStr, loadRosterPage])
+
   return (
     <div className="min-h-screen">
       <AppHeader
         title="Attendance"
         subtitle="Mark attendance by day — bulk actions for large teams"
       />
-      <div className="p-6 space-y-6 max-w-[1400px] mx-auto">
+      <div className="space-y-6 p-4 sm:p-6">
         <AttendanceSubNav />
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-2">
             <Label className="text-xs text-muted-foreground">Working date</Label>
+            <p className="text-[11px] text-muted-foreground sm:text-xs">
+              Only today and past dates — future days cannot be marked.
+            </p>
             <Popover>
               <PopoverTrigger asChild>
                 <Button
                   variant="outline"
-                  className="w-full sm:w-56 justify-start text-left font-normal h-9 text-sm"
+                  className="h-9 w-full justify-start text-left text-sm font-normal sm:w-56"
                 >
                   <CalendarDays className="mr-2 h-4 w-4 text-muted-foreground" />
                   {format(attendanceDate, 'EEE, MMM dd, yyyy')}
@@ -365,7 +496,15 @@ export function AttendancePage() {
                 <Calendar
                   mode="single"
                   selected={attendanceDate}
-                  onSelect={(d) => d && setAttendanceDate(d)}
+                  onSelect={(d) => {
+                    if (!d) return
+                    if (isFutureAttendanceDate(d)) {
+                      toast.error('Attendance cannot be recorded for a future date.')
+                      return
+                    }
+                    setAttendanceDate(d)
+                  }}
+                  disabled={(d) => isFutureAttendanceDate(d)}
                   initialFocus
                 />
               </PopoverContent>
@@ -410,47 +549,71 @@ export function AttendancePage() {
           </div>
         </div>
 
-        <div className="rounded-xl border border-[#dfe5f7] bg-white p-4 shadow-[0_8px_24px_rgba(43,65,140,0.05)] space-y-3">
-          <h3 className="text-sm font-medium text-foreground">Bulk actions</h3>
-          <p className="text-xs text-muted-foreground max-w-3xl">
-            Filters apply to the roster below. Unmarked-only actions use the same search and
-            department filters as the table. Selected-row actions use your checkboxes. Org-wide
-            counts for the day are in the badges above.
+        <div className="space-y-3 rounded-xl border border-[#dfe5f7] bg-white p-4 shadow-[0_8px_24px_rgba(43,65,140,0.05)]">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between gap-2 rounded-lg border border-[#eef1f8] bg-[#fafbff] px-3 py-2.5 text-left md:hidden"
+            onClick={() => setMobileBulkOpen((v) => !v)}
+            aria-expanded={mobileBulkOpen}
+          >
+            <span className="text-sm font-medium text-foreground">Bulk actions</span>
+            <ChevronDown
+              className={cn(
+                'h-4 w-4 shrink-0 text-muted-foreground transition-transform',
+                mobileBulkOpen && 'rotate-180',
+              )}
+            />
+          </button>
+          <h3 className="hidden text-sm font-medium text-foreground md:block">Bulk actions</h3>
+          <div
+            className={cn(
+              'space-y-3',
+              !mobileBulkOpen && 'max-md:hidden',
+            )}
+          >
+          <p className="max-w-3xl text-xs text-muted-foreground">
+            Filters apply to the roster below. Unmarked-only actions use the same search,
+            department, and day-status filters as the table. Selected-row actions use your
+            checkboxes. Org-wide counts for the day are in the badges above.
           </p>
           <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              size="sm"
-              disabled={isSaving || totalCount === 0}
-              className="h-9 bg-success text-success-foreground shadow-none hover:bg-success/90"
-              onClick={() => void runBulkUnmarkedMatchingPresent()}
-            >
-              {isSaving ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <UserCheck className="h-4 w-4" />
-              )}
-              <span className="ml-1.5">Unmarked only → present</span>
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              disabled={isSaving || totalCount === 0}
-              className="h-9 bg-destructive text-destructive-foreground shadow-none hover:bg-destructive/90"
-              onClick={() => void runBulkUnmarkedMatchingAbsent()}
-            >
-              {isSaving ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <UserX className="h-4 w-4" />
-              )}
-              <span className="ml-1.5">Unmarked only → absent</span>
-            </Button>
+            {selectedIds.size === 0 && (
+              <>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={isSaving || totalCount === 0 || isWorkingDateFuture}
+                  className="h-9 bg-success text-success-foreground shadow-none hover:bg-success/90"
+                  onClick={() => void runBulkUnmarkedMatchingPresent()}
+                >
+                  {isSaving ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <UserCheck className="h-4 w-4" />
+                  )}
+                  <span className="ml-1.5">Unmarked only → present</span>
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={isSaving || totalCount === 0 || isWorkingDateFuture}
+                  className="h-9 bg-destructive text-destructive-foreground shadow-none hover:bg-destructive/90"
+                  onClick={() => void runBulkUnmarkedMatchingAbsent()}
+                >
+                  {isSaving ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <UserX className="h-4 w-4" />
+                  )}
+                  <span className="ml-1.5">Unmarked only → absent</span>
+                </Button>
+              </>
+            )}
             <Button
               type="button"
               size="sm"
               variant="outline"
-              disabled={isSaving || selectedIds.size === 0}
+              disabled={isSaving || selectedIds.size === 0 || isWorkingDateFuture}
               className="h-9 border-success/40 bg-success/5 text-success hover:bg-success/15 hover:text-success"
               onClick={() =>
                 void runBulk({
@@ -467,7 +630,7 @@ export function AttendancePage() {
               type="button"
               size="sm"
               variant="outline"
-              disabled={isSaving || selectedIds.size === 0}
+              disabled={isSaving || selectedIds.size === 0 || isWorkingDateFuture}
               className="h-9 border-destructive/40 bg-destructive/5 text-destructive hover:bg-destructive/15 hover:text-destructive"
               onClick={() =>
                 void runBulk({
@@ -481,11 +644,26 @@ export function AttendancePage() {
               <span className="ml-1.5">Selected ({selectedIds.size}) → absent</span>
             </Button>
           </div>
+          </div>
         </div>
 
-        <div className="rounded-xl border border-dashed border-[#d8deef] bg-[#fafbff] p-4 shadow-none space-y-3">
-          <h3 className="text-sm font-medium text-foreground">Demo attendance</h3>
-          <p className="text-xs text-muted-foreground max-w-3xl">
+        <div className="space-y-3 rounded-xl border border-dashed border-[#d8deef] bg-[#fafbff] p-4 shadow-none">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between gap-2 rounded-lg border border-[#e8ecf7] bg-white px-3 py-2.5 text-left"
+            onClick={() => setDemoAttendanceOpen((v) => !v)}
+            aria-expanded={demoAttendanceOpen}
+          >
+            <span className="text-sm font-medium text-foreground">Demo attendance</span>
+            <ChevronDown
+              className={cn(
+                'h-4 w-4 shrink-0 text-muted-foreground transition-transform',
+                demoAttendanceOpen && 'rotate-180',
+              )}
+            />
+          </button>
+          <div className={cn('space-y-3', !demoAttendanceOpen && 'hidden')}>
+          <p className="max-w-3xl text-xs text-muted-foreground">
             Fill the last N calendar days <span className="font-medium">before today</span> for every
             employee (useful for charts and testing). Today is left unchanged. You can remove every
             attendance row below without deleting employees.
@@ -527,11 +705,13 @@ export function AttendancePage() {
               disabled={isDemoPastLoading || employees.length === 0}
               className="h-9"
               onClick={() => {
+                if (demoPastGuardRef.current) return
                 const n = Number.parseInt(demoPastDays, 10)
                 if (!Number.isFinite(n) || n < 1 || n > 366) {
                   toast.error('Enter a number of days between 1 and 366.')
                   return
                 }
+                demoPastGuardRef.current = true
                 void (async () => {
                   setIsDemoPastLoading(true)
                   try {
@@ -548,6 +728,7 @@ export function AttendancePage() {
                     )
                   } finally {
                     setIsDemoPastLoading(false)
+                    demoPastGuardRef.current = false
                   }
                 })()
               }}
@@ -578,10 +759,15 @@ export function AttendancePage() {
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogCancel disabled={isPurgeAttendanceLoading}>
+                    Cancel
+                  </AlertDialogCancel>
                   <AlertDialogAction
+                    disabled={isPurgeAttendanceLoading}
                     className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                     onClick={() => {
+                      if (purgeAttendanceGuardRef.current) return
+                      purgeAttendanceGuardRef.current = true
                       void (async () => {
                         setIsPurgeAttendanceLoading(true)
                         try {
@@ -595,26 +781,28 @@ export function AttendancePage() {
                           )
                         } finally {
                           setIsPurgeAttendanceLoading(false)
+                          purgeAttendanceGuardRef.current = false
                         }
                       })()
                     }}
                   >
-                    Delete all
+                    {isPurgeAttendanceLoading ? 'Deleting…' : 'Delete all'}
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
           </div>
+          </div>
         </div>
 
-        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-          <div className="relative flex-1 max-w-md">
+        <CollapsibleFilterBar activeCount={listFilterActiveCount} label="Roster filters">
+          <div className="relative w-full min-w-0 md:max-w-md md:flex-1">
             <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               placeholder="Search by name, ID, or email…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-9 rounded-lg border-[#d8deef] bg-white pl-9 text-sm"
+              className="h-9 w-full rounded-lg border-[#d8deef] bg-white pl-9 text-sm"
             />
           </div>
           <Select
@@ -624,7 +812,7 @@ export function AttendancePage() {
               setPage(1)
             }}
           >
-            <SelectTrigger className="h-9 w-full sm:w-48 border-[#d8deef] bg-white text-sm">
+            <SelectTrigger className="h-9 w-full border-[#d8deef] bg-white text-sm md:w-48">
               <SelectValue placeholder="Department" />
             </SelectTrigger>
             <SelectContent>
@@ -637,13 +825,29 @@ export function AttendancePage() {
             </SelectContent>
           </Select>
           <Select
+            value={rosterAttendanceFilter}
+            onValueChange={(value) => {
+              setRosterAttendanceFilter(value as RosterAttendanceFilter)
+              setPage(1)
+            }}
+          >
+            <SelectTrigger className="h-9 w-full border-[#d8deef] bg-white text-sm md:w-44">
+              <SelectValue placeholder="Day status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">All statuses</SelectItem>
+              <SelectItem value="present">Present only</SelectItem>
+              <SelectItem value="absent">Absent only</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select
             value={String(pageSize)}
             onValueChange={(value) => {
               setPageSize(Number(value))
               setPage(1)
             }}
           >
-            <SelectTrigger className="h-9 w-[4.5rem] border-[#d8deef] bg-white text-sm">
+            <SelectTrigger className="h-9 w-full border-[#d8deef] bg-white text-sm md:w-[4.5rem]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -652,20 +856,41 @@ export function AttendancePage() {
               <SelectItem value="50">50</SelectItem>
             </SelectContent>
           </Select>
-        </div>
+        </CollapsibleFilterBar>
 
         <div className="overflow-hidden rounded-xl border border-[#dfe5f7] bg-white shadow-[0_8px_24px_rgba(43,65,140,0.05)]">
-          <div className="flex items-center justify-between border-b border-[#e7ecfa] px-4 py-2 text-xs text-muted-foreground">
-            <span>
-              Showing{' '}
-              <span className="font-medium text-foreground tabular-nums">
-                {rangeStart}–{rangeEnd}
-              </span>{' '}
-              of{' '}
-              <span className="font-medium text-foreground tabular-nums">{totalCount}</span>
-              {hasActiveListFilters ? ' (filtered)' : ''}
-            </span>
-            <div className="flex items-center gap-1">
+          <div className="flex items-center justify-between gap-2 border-b border-[#e7ecfa] px-3 py-2 text-xs text-muted-foreground sm:px-4">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <div
+                className="flex shrink-0 items-center md:hidden"
+                onClick={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
+              >
+                <Checkbox
+                  checked={headerCheckboxChecked}
+                  disabled={
+                    totalCount === 0 || isRosterLoading || isSelectAllLoading
+                  }
+                  onCheckedChange={() => {
+                    void toggleSelectAllMatching()
+                  }}
+                  aria-label="Select all employees matching current filters"
+                  className="h-5 w-5 border-[#7a8fc4] shadow-sm data-[state=unchecked]:bg-white"
+                />
+              </div>
+              <span className="min-w-0 leading-snug">
+                Showing{' '}
+                <span className="font-medium text-foreground tabular-nums">
+                  {rangeStart}–{rangeEnd}
+                </span>{' '}
+                of{' '}
+                <span className="font-medium text-foreground tabular-nums">
+                  {totalCount}
+                </span>
+                {hasActiveListFilters ? ' (filtered)' : ''}
+              </span>
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
               <Button
                 type="button"
                 variant="ghost"
@@ -704,136 +929,304 @@ export function AttendancePage() {
                 : 'No employees yet.'}
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead className="w-10">
-                    <Checkbox
-                      checked={headerCheckboxChecked}
-                      disabled={
-                        totalCount === 0 || isRosterLoading || isSelectAllLoading
-                      }
-                      onCheckedChange={() => {
-                        void toggleSelectAllMatching()
-                      }}
-                      aria-label="Select all employees matching current filters"
-                    />
-                  </TableHead>
-                  <TableHead className="text-muted-foreground">Employee</TableHead>
-                  <TableHead className="text-muted-foreground hidden sm:table-cell">
-                    ID
-                  </TableHead>
-                  <TableHead className="text-muted-foreground hidden md:table-cell">
-                    Department
-                  </TableHead>
-                  <TableHead className="text-muted-foreground">Status</TableHead>
-                  <TableHead className="text-right text-muted-foreground w-[200px]">
-                    Quick set
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+            <>
+              <div className="hidden overflow-x-auto md:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead className="w-10">
+                        <Checkbox
+                          checked={headerCheckboxChecked}
+                          disabled={
+                            totalCount === 0 || isRosterLoading || isSelectAllLoading
+                          }
+                          onCheckedChange={() => {
+                            void toggleSelectAllMatching()
+                          }}
+                          aria-label="Select all employees matching current filters"
+                        />
+                      </TableHead>
+                      <TableHead>Employee</TableHead>
+                      <TableHead className="hidden sm:table-cell">ID</TableHead>
+                      <TableHead className="hidden md:table-cell">Department</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="w-[260px] text-right">Quick set</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {rosterEmployees.map((employee) => {
+                      const st = statusFor(employee)
+                      const dayRec = dayMap.get(employee.id)
+                      return (
+                        <TableRow
+                          key={employee.id}
+                          className="cursor-pointer hover:bg-[#f7f9ff]"
+                          onClick={() => navigate(`/employees/${employee.id}`)}
+                        >
+                          <TableCell onClick={(e) => e.stopPropagation()}>
+                            <Checkbox
+                              checked={selectedIds.has(employee.id)}
+                              onCheckedChange={() => toggleSelect(employee.id)}
+                              aria-label={`Select ${employee.fullName}`}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-3">
+                              <Avatar className="h-8 w-8 border border-[#d9e1f4]">
+                                <AvatarFallback className="bg-[#edf2ff] text-[#2b418c] text-xs font-medium">
+                                  {getInitials(employee.fullName)}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-medium">
+                                  {employee.fullName}
+                                </p>
+                                <p className="truncate text-xs text-muted-foreground sm:hidden">
+                                  {employee.employeeId} · {employee.department}
+                                </p>
+                              </div>
+                            </div>
+                          </TableCell>
+                          <TableCell className="hidden font-mono text-xs text-muted-foreground sm:table-cell">
+                            {employee.employeeId}
+                          </TableCell>
+                          <TableCell className="hidden text-sm md:table-cell">
+                            {employee.department}
+                          </TableCell>
+                          <TableCell>
+                            {st === 'unmarked' && (
+                              <Badge variant="outline" className="text-xs font-normal">
+                                Unmarked
+                              </Badge>
+                            )}
+                            {st === 'present' && (
+                              <Badge className="border-success/20 bg-success/10 text-xs text-success hover:bg-success/10">
+                                Present
+                              </Badge>
+                            )}
+                            {st === 'absent' && (
+                              <Badge className="border-destructive/20 bg-destructive/10 text-xs text-destructive hover:bg-destructive/10">
+                                Absent
+                              </Badge>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex justify-end gap-1">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                className={cn(
+                                  'h-8 px-2 text-xs',
+                                  st === 'present' && 'bg-success/10 text-success',
+                                )}
+                                disabled={isSaving || isWorkingDateFuture}
+                                onClick={() =>
+                                  void runBulk({
+                                    status: 'present',
+                                    employeeIds: [employee.id],
+                                    successMessage: `${employee.fullName} marked present.`,
+                                  })
+                                }
+                              >
+                                Present
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                className={cn(
+                                  'h-8 px-2 text-xs',
+                                  st === 'absent' && 'bg-destructive/10 text-destructive',
+                                )}
+                                disabled={isSaving || isWorkingDateFuture}
+                                onClick={() =>
+                                  void runBulk({
+                                    status: 'absent',
+                                    employeeIds: [employee.id],
+                                    successMessage: `${employee.fullName} marked absent.`,
+                                  })
+                                }
+                              >
+                                Absent
+                              </Button>
+                              {dayRec && (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-8 w-8 shrink-0 p-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                  disabled={
+                                    isSaving || isClearAttendanceLoading || isWorkingDateFuture
+                                  }
+                                  title="Clear attendance for this day"
+                                  onClick={() =>
+                                    setClearAttendanceTarget({
+                                      recordId: dayRec.id,
+                                      employeeName: employee.fullName,
+                                    })
+                                  }
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                  <span className="sr-only">Clear attendance</span>
+                                </Button>
+                              )}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+              <ul className="space-y-3 p-3 md:hidden" aria-label="Attendance roster">
                 {rosterEmployees.map((employee) => {
                   const st = statusFor(employee)
+                  const dayRec = dayMap.get(employee.id)
                   return (
-                    <TableRow key={employee.id}>
-                      <TableCell>
-                        <Checkbox
-                          checked={selectedIds.has(employee.id)}
-                          onCheckedChange={() => toggleSelect(employee.id)}
-                          aria-label={`Select ${employee.fullName}`}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-3">
-                          <Avatar className="h-8 w-8 border border-[#d9e1f4]">
-                            <AvatarFallback className="bg-[#edf2ff] text-[#2b418c] text-xs font-medium">
-                              {getInitials(employee.fullName)}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium truncate">
-                              {employee.fullName}
-                            </p>
-                            <p className="text-xs text-muted-foreground truncate sm:hidden">
-                              {employee.employeeId} · {employee.department}
-                            </p>
+                    <li
+                      key={employee.id}
+                      className="rounded-xl border border-[#dfe5f7] bg-[#fafbff] p-4 shadow-sm"
+                    >
+                      <div className="flex gap-3">
+                        <div
+                          className="flex h-11 w-11 shrink-0 items-center justify-center self-start rounded-lg border border-[#b8c4e6] bg-white shadow-sm active:bg-[#eef1fb]"
+                          onClick={(e) => e.stopPropagation()}
+                          onPointerDown={(e) => e.stopPropagation()}
+                        >
+                          <Checkbox
+                            checked={selectedIds.has(employee.id)}
+                            onCheckedChange={() => toggleSelect(employee.id)}
+                            aria-label={`Select ${employee.fullName}`}
+                            className="h-5 w-5 border-[#7a8fc4] shadow-sm data-[state=unchecked]:bg-white"
+                          />
+                        </div>
+                        <div className="min-w-0 flex-1 space-y-3">
+                          <div className="flex items-start justify-between gap-2">
+                            <Link
+                              to={`/employees/${employee.id}`}
+                              className="min-w-0 flex items-center gap-2 rounded-md text-left transition-colors hover:bg-[#f0f3fc] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2b418c]/25"
+                            >
+                              <Avatar className="h-9 w-9 shrink-0 border border-[#d9e1f4]">
+                                <AvatarFallback className="bg-[#edf2ff] text-[#2b418c] text-xs font-medium">
+                                  {getInitials(employee.fullName)}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div className="min-w-0">
+                                <p className="text-sm font-semibold text-[#2b418c]">
+                                  {employee.fullName}
+                                </p>
+                                <p className="truncate font-mono text-[11px] text-muted-foreground">
+                                  {employee.employeeId} · {employee.department}
+                                </p>
+                              </div>
+                            </Link>
+                            <div className="shrink-0">
+                              {st === 'unmarked' && (
+                                <Badge variant="outline" className="text-xs font-normal">
+                                  Unmarked
+                                </Badge>
+                              )}
+                              {st === 'present' && (
+                                <Badge className="border-success/20 bg-success/10 text-xs text-success">
+                                  Present
+                                </Badge>
+                              )}
+                              {st === 'absent' && (
+                                <Badge className="border-destructive/20 bg-destructive/10 text-xs text-destructive">
+                                  Absent
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className={cn(
+                                'h-8 flex-1 text-xs sm:flex-none',
+                                st === 'present' && 'border-success/40 bg-success/5 text-success',
+                              )}
+                              disabled={isSaving || isWorkingDateFuture}
+                              onClick={() =>
+                                void runBulk({
+                                  status: 'present',
+                                  employeeIds: [employee.id],
+                                  successMessage: `${employee.fullName} marked present.`,
+                                })
+                              }
+                            >
+                              Present
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className={cn(
+                                'h-8 flex-1 text-xs sm:flex-none',
+                                st === 'absent' && 'border-destructive/40 bg-destructive/5 text-destructive',
+                              )}
+                              disabled={isSaving || isWorkingDateFuture}
+                              onClick={() =>
+                                void runBulk({
+                                  status: 'absent',
+                                  employeeIds: [employee.id],
+                                  successMessage: `${employee.fullName} marked absent.`,
+                                })
+                              }
+                            >
+                              Absent
+                            </Button>
+                            {dayRec ? (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-8 shrink-0 border-destructive/30 text-destructive hover:bg-destructive/10"
+                                disabled={
+                                  isSaving || isClearAttendanceLoading || isWorkingDateFuture
+                                }
+                                title="Clear attendance for this day"
+                                onClick={() =>
+                                  setClearAttendanceTarget({
+                                    recordId: dayRec.id,
+                                    employeeName: employee.fullName,
+                                  })
+                                }
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                <span className="sr-only">Clear</span>
+                              </Button>
+                            ) : null}
                           </div>
                         </div>
-                      </TableCell>
-                      <TableCell className="hidden sm:table-cell font-mono text-xs text-muted-foreground">
-                        {employee.employeeId}
-                      </TableCell>
-                      <TableCell className="hidden md:table-cell text-sm">
-                        {employee.department}
-                      </TableCell>
-                      <TableCell>
-                        {st === 'unmarked' && (
-                          <Badge variant="outline" className="text-xs font-normal">
-                            Unmarked
-                          </Badge>
-                        )}
-                        {st === 'present' && (
-                          <Badge className="text-xs bg-success/10 text-success border-success/20 hover:bg-success/10">
-                            Present
-                          </Badge>
-                        )}
-                        {st === 'absent' && (
-                          <Badge className="text-xs bg-destructive/10 text-destructive border-destructive/20 hover:bg-destructive/10">
-                            Absent
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            className={cn(
-                              'h-8 px-2 text-xs',
-                              st === 'present' && 'bg-success/10 text-success',
-                            )}
-                            disabled={isSaving}
-                            onClick={() =>
-                              void runBulk({
-                                status: 'present',
-                                employeeIds: [employee.id],
-                                successMessage: `${employee.fullName} marked present.`,
-                              })
-                            }
-                          >
-                            Present
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            className={cn(
-                              'h-8 px-2 text-xs',
-                              st === 'absent' && 'bg-destructive/10 text-destructive',
-                            )}
-                            disabled={isSaving}
-                            onClick={() =>
-                              void runBulk({
-                                status: 'absent',
-                                employeeIds: [employee.id],
-                                successMessage: `${employee.fullName} marked absent.`,
-                              })
-                            }
-                          >
-                            Absent
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
+                      </div>
+                    </li>
                   )
                 })}
-              </TableBody>
-            </Table>
+              </ul>
+            </>
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={clearAttendanceTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !isClearAttendanceLoading) setClearAttendanceTarget(null)
+        }}
+        title="Clear attendance for this day?"
+        description={
+          clearAttendanceTarget
+            ? `Remove the record for ${clearAttendanceTarget.employeeName} on ${format(attendanceDate, 'MMM d, yyyy')}. They will show as unmarked.`
+            : ''
+        }
+        confirmLabel={isClearAttendanceLoading ? 'Clearing…' : 'Clear record'}
+        pending={isClearAttendanceLoading}
+        onConfirm={() => void handleClearAttendance()}
+        variant="destructive"
+      />
     </div>
   )
 }

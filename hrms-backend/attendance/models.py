@@ -16,7 +16,11 @@ class AttendanceStatus(models.TextChoices):
 
 class Attendance(models.Model):
     """
-    One row per employee per day; duplicates are prevented at the database level.
+    One row per employee per day.
+
+    ``unique_together`` enforces a single row per (employee, date). Concurrent saves use upserts
+    or row locks so two HR users cannot create two rows for the same cell; the last committed
+    ``status`` wins if they disagree.
     """
 
     id = models.AutoField(primary_key=True)

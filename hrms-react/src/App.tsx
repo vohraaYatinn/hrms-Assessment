@@ -6,6 +6,7 @@ import { AppLayout } from '@/components/app-layout'
 import { AttendanceCalendarPage } from '@/pages/AttendanceCalendarPage'
 import { AttendancePage } from '@/pages/AttendancePage'
 import { DashboardPage } from '@/pages/DashboardPage'
+import { EmployeeDetailPage } from '@/pages/EmployeeDetailPage'
 import { EmployeesPage } from '@/pages/EmployeesPage'
 import { LoginPage } from '@/pages/LoginPage'
 
@@ -35,6 +36,7 @@ export default function App() {
           >
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/employees" element={<EmployeesPage />} />
+            <Route path="/employees/:id" element={<EmployeeDetailPage />} />
             <Route path="/attendance/calendar" element={<AttendanceCalendarPage />} />
             <Route path="/attendance" element={<AttendancePage />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />

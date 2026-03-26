@@ -1,4 +1,5 @@
 import { type LucideIcon, TrendingUp, TrendingDown } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 
 interface StatCardProps {
@@ -11,6 +12,8 @@ interface StatCardProps {
   }
   variant?: 'default' | 'accent' | 'success' | 'warning'
   className?: string
+  /** When set, the card is a link to this route */
+  to?: string
 }
 
 const variantStyles = {
@@ -32,23 +35,26 @@ const variantStyles = {
   },
 }
 
-export function StatCard({ 
-  icon: Icon, 
-  label, 
-  value, 
-  trend, 
+const cardShellClass =
+  'block rounded-xl border border-[#dfe5f7] bg-white p-4 shadow-[0_8px_24px_rgba(43,65,140,0.06)] transition-colors'
+
+export function StatCard({
+  icon: Icon,
+  label,
+  value,
+  trend,
   variant = 'default',
-  className 
+  className,
+  to,
 }: StatCardProps) {
   const styles = variantStyles[variant]
 
-  return (
-    <div
-      className={cn(
-        'rounded-xl border border-[#dfe5f7] bg-white p-4 shadow-[0_8px_24px_rgba(43,65,140,0.06)]',
-        className
-      )}
-    >
+  const interactiveClass = to
+    ? 'cursor-pointer hover:border-[#c5d2f0] hover:bg-[#fafbff] hover:shadow-[0_10px_28px_rgba(43,65,140,0.09)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2b418c]/25 focus-visible:ring-offset-2'
+    : ''
+
+  const body = (
+    <>
       <div className="flex items-center gap-3 mb-3">
         <div className={cn('rounded-lg p-2', styles.icon)}>
           <Icon className="h-4 w-4" />
@@ -73,6 +79,16 @@ export function StatCard({
           </span>
         )}
       </div>
-    </div>
+    </>
   )
+
+  if (to) {
+    return (
+      <Link to={to} className={cn(cardShellClass, interactiveClass, className)} aria-label={`${label}: ${value}`}>
+        {body}
+      </Link>
+    )
+  }
+
+  return <div className={cn(cardShellClass, className)}>{body}</div>
 }

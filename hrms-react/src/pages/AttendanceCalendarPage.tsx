@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import {
   format,
+  parseISO,
   eachDayOfInterval,
   subDays,
   startOfMonth,
@@ -20,11 +21,19 @@ import {
   Grid3X3,
 } from 'lucide-react'
 import { AppHeader } from '@/components/app-header'
+import { CollapsibleFilterBar } from '@/components/collapsible-filter-bar'
 import { AttendanceSubNav } from '@/components/attendance-subnav'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Calendar } from '@/components/ui/calendar'
 import {
   Popover,
@@ -52,7 +61,10 @@ import {
   type Employee,
   type AttendanceRecord,
 } from '@/lib/types'
+import { useNavigate } from 'react-router-dom'
+import { useHRMS } from '@/lib/store'
 import {
+  bulkAttendance,
   fetchAttendanceByRange,
   fetchEmployeesPage,
 } from '../../backend/api.js'
@@ -68,7 +80,11 @@ function buildMatrix(records: AttendanceRecord[]) {
   return m
 }
 
+type MarkDialogState = { employee: Employee; dateStr: string } | null
+
 export function AttendanceCalendarPage() {
+  const navigate = useNavigate()
+  const { syncAttendanceForDate } = useHRMS()
   const [rangeMode, setRangeMode] = useState<RangeMode>('seven')
   const [focusDate, setFocusDate] = useState<Date>(() => new Date())
   const [searchQuery, setSearchQuery] = useState('')
@@ -82,6 +98,12 @@ export function AttendanceCalendarPage() {
   const [isRosterLoading, setIsRosterLoading] = useState(true)
   const [rangeRecords, setRangeRecords] = useState<AttendanceRecord[]>([])
   const [isRangeLoading, setIsRangeLoading] = useState(true)
+  const [markDialog, setMarkDialog] = useState<MarkDialogState>(null)
+  const [pendingMarkStatus, setPendingMarkStatus] = useState<
+    'present' | 'absent' | null
+  >(null)
+  const [isMarking, setIsMarking] = useState(false)
+  const markingGuardRef = useRef(false)
   const skipSearchPageResetRef = useRef(true)
 
   useEffect(() => {
@@ -159,6 +181,55 @@ export function AttendanceCalendarPage() {
 
   const matrix = useMemo(() => buildMatrix(rangeRecords), [rangeRecords])
 
+  const refreshRangeRecords = useCallback(async () => {
+    try {
+      const rows = await fetchAttendanceByRange(rangeStartStr, rangeEndStr)
+      setRangeRecords(rows)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not refresh attendance.')
+    }
+  }, [rangeStartStr, rangeEndStr])
+
+  const closeMarkDialog = useCallback(() => {
+    if (isMarking) return
+    setMarkDialog(null)
+    setPendingMarkStatus(null)
+  }, [isMarking])
+
+  const confirmMarkAttendance = useCallback(async () => {
+    if (!markDialog || !pendingMarkStatus || markingGuardRef.current) return
+    markingGuardRef.current = true
+    setIsMarking(true)
+    try {
+      const matrixKey = `${markDialog.employee.id}\t${markDialog.dateStr}`
+      const prior = matrix.get(matrixKey)
+      await bulkAttendance({
+        date: markDialog.dateStr,
+        status: pendingMarkStatus,
+        employeeIds: [markDialog.employee.id],
+        employeeExpectations: [
+          {
+            employeeId: markDialog.employee.id,
+            expectedCurrentStatus:
+              prior === 'present' || prior === 'absent' ? prior : null,
+          },
+        ],
+      })
+      await syncAttendanceForDate(markDialog.dateStr)
+      await refreshRangeRecords()
+      toast.success(
+        `Marked ${markDialog.employee.fullName} ${pendingMarkStatus} on ${format(parseISO(markDialog.dateStr), 'MMM d, yyyy')}.`,
+      )
+      setMarkDialog(null)
+      setPendingMarkStatus(null)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not save attendance.')
+    } finally {
+      setIsMarking(false)
+      markingGuardRef.current = false
+    }
+  }, [markDialog, matrix, pendingMarkStatus, refreshRangeRecords, syncAttendanceForDate])
+
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
   useEffect(() => {
     setPage((p) => Math.min(p, totalPages))
@@ -175,13 +246,17 @@ export function AttendanceCalendarPage() {
 
   const isLoadingGrid = isRosterLoading || isRangeLoading
 
+  const listFilterActiveCount =
+    (debouncedSearch.trim() !== '' ? 1 : 0) +
+    (listDepartmentFilter !== '__all__' ? 1 : 0)
+
   return (
     <div className="min-h-screen">
       <AppHeader
         title="Attendance"
         subtitle="Calendar matrix — scan recent days or a full month per employee"
       />
-      <div className="p-6 space-y-5 max-w-[1600px] mx-auto">
+      <div className="mx-auto max-w-[1600px] space-y-5 p-4 sm:p-6">
         <AttendanceSubNav />
 
         <div className="flex flex-col gap-4 rounded-xl border border-[#dfe5f7] bg-white p-4 shadow-[0_8px_24px_rgba(43,65,140,0.05)]">
@@ -277,19 +352,19 @@ export function AttendanceCalendarPage() {
           <p className="text-xs text-muted-foreground">
             <span className="font-medium text-foreground">P</span> present ·{' '}
             <span className="font-medium text-foreground">A</span> absent ·{' '}
-            <span className="text-muted-foreground">—</span> no record. Columns match calendar
-            days ({dateColumns.length} days). Use Daily roster to edit marks.
+            <span className="text-muted-foreground">—</span> no record. Click any cell to mark
+            present or absent (with confirmation). Columns: {dateColumns.length} days.
           </p>
         </div>
 
-        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-          <div className="relative flex-1 max-w-md">
+        <CollapsibleFilterBar activeCount={listFilterActiveCount} label="Roster filters">
+          <div className="relative w-full min-w-0 md:max-w-md md:flex-1">
             <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               placeholder="Search by name, ID, or email…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-9 rounded-lg border-[#d8deef] bg-white pl-9 text-sm"
+              className="h-9 w-full rounded-lg border-[#d8deef] bg-white pl-9 text-sm"
             />
           </div>
           <Select
@@ -299,7 +374,7 @@ export function AttendanceCalendarPage() {
               setPage(1)
             }}
           >
-            <SelectTrigger className="h-9 w-full sm:w-48 border-[#d8deef] bg-white text-sm">
+            <SelectTrigger className="h-9 w-full border-[#d8deef] bg-white text-sm md:w-48">
               <SelectValue placeholder="Department" />
             </SelectTrigger>
             <SelectContent>
@@ -318,7 +393,7 @@ export function AttendanceCalendarPage() {
               setPage(1)
             }}
           >
-            <SelectTrigger className="h-9 w-[4.5rem] border-[#d8deef] bg-white text-sm">
+            <SelectTrigger className="h-9 w-full border-[#d8deef] bg-white text-sm md:w-[4.5rem]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -327,7 +402,7 @@ export function AttendanceCalendarPage() {
               <SelectItem value="50">50</SelectItem>
             </SelectContent>
           </Select>
-        </div>
+        </CollapsibleFilterBar>
 
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
           <span>
@@ -376,10 +451,11 @@ export function AttendanceCalendarPage() {
                 No employees match your filters.
               </div>
             ) : (
-              <Table className="min-w-max border-collapse">
+              <>
+              <Table className="hidden min-w-max border-collapse lg:table">
                 <TableHeader>
                   <TableRow className="hover:bg-transparent border-b border-[#e7ecfa]">
-                    <TableHead className="sticky left-0 z-20 min-w-[200px] bg-white px-3 py-2 text-xs font-medium text-muted-foreground shadow-[4px_0_12px_rgba(43,65,140,0.06)]">
+                    <TableHead className="sticky left-0 z-20 min-w-[200px] bg-white px-3 py-2 text-xs font-medium shadow-[4px_0_12px_rgba(43,65,140,0.06)]">
                       Employee
                     </TableHead>
                     {dateColumns.map((d) => {
@@ -390,10 +466,10 @@ export function AttendanceCalendarPage() {
                           className="w-11 min-w-[2.75rem] px-0.5 py-2 text-center align-bottom"
                         >
                           <div className="flex flex-col items-center gap-0.5 leading-none">
-                            <span className="text-[10px] font-medium uppercase text-muted-foreground">
+                            <span className="text-[10px] font-medium uppercase text-[#2b418c]">
                               {format(d, 'EEE')}
                             </span>
-                            <span className="text-xs font-semibold text-foreground tabular-nums">
+                            <span className="text-xs font-semibold tabular-nums text-[#2b418c]">
                               {format(d, 'd')}
                             </span>
                           </div>
@@ -406,44 +482,59 @@ export function AttendanceCalendarPage() {
                   {rosterEmployees.map((emp) => (
                     <TableRow key={emp.id} className="border-[#f0f3fb]">
                       <TableCell className="sticky left-0 z-10 bg-white px-3 py-1.5 shadow-[4px_0_12px_rgba(43,65,140,0.06)]">
-                        <div className="min-w-0">
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/employees/${emp.id}`)}
+                          className="min-w-0 w-full rounded-md text-left transition-colors hover:bg-[#f7f9ff] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2b418c]/25 -mx-1 px-1 py-0.5"
+                        >
                           <p className="truncate text-sm font-medium text-foreground">
                             {emp.fullName}
                           </p>
                           <p className="truncate font-mono text-[11px] text-muted-foreground">
                             {emp.employeeId} · {emp.department}
                           </p>
-                        </div>
+                        </button>
                       </TableCell>
                       {dateColumns.map((d) => {
                         const ds = format(d, 'yyyy-MM-dd')
                         const st = matrix.get(`${emp.id}\t${ds}`)
                         return (
                           <TableCell key={ds} className="p-0.5 text-center">
-                            {st === 'present' && (
-                              <Badge
-                                className="h-7 w-7 shrink-0 rounded-md border-success/25 bg-success/15 px-0 text-[11px] font-semibold text-success hover:bg-success/15"
-                                title="Present"
-                              >
-                                P
-                              </Badge>
-                            )}
-                            {st === 'absent' && (
-                              <Badge
-                                className="h-7 w-7 shrink-0 rounded-md border-destructive/25 bg-destructive/10 px-0 text-[11px] font-semibold text-destructive hover:bg-destructive/10"
-                                title="Absent"
-                              >
-                                A
-                              </Badge>
-                            )}
-                            {!st && (
-                              <span
-                                className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-dashed border-[#dfe5f7] bg-[#fafbff] text-xs text-muted-foreground"
-                                title="No record"
-                              >
-                                —
-                              </span>
-                            )}
+                            <button
+                              type="button"
+                              disabled={isLoadingGrid}
+                              onClick={() => {
+                                setMarkDialog({ employee: emp, dateStr: ds })
+                                setPendingMarkStatus(null)
+                              }}
+                              className="group mx-auto flex h-8 w-8 cursor-pointer items-center justify-center rounded-md transition-all duration-200 ease-out hover:scale-110 hover:-translate-y-0.5 hover:shadow-[0_6px_16px_rgba(43,65,140,0.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2b418c]/35 active:scale-95 active:translate-y-0 disabled:pointer-events-none disabled:opacity-50 disabled:hover:scale-100 disabled:hover:translate-y-0 disabled:hover:shadow-none"
+                              aria-label={`Attendance for ${emp.fullName} on ${format(parseISO(ds), 'MMM d')}: ${st === 'present' ? 'present' : st === 'absent' ? 'absent' : 'unmarked'}. Click to change.`}
+                            >
+                              {st === 'present' && (
+                                <Badge
+                                  className="pointer-events-none h-7 w-7 shrink-0 rounded-md border-success/25 bg-success/15 px-0 text-[11px] font-semibold text-success transition-all duration-200 group-hover:border-success/50 group-hover:bg-success/25 group-hover:shadow-sm"
+                                  title="Present — click to change"
+                                >
+                                  P
+                                </Badge>
+                              )}
+                              {st === 'absent' && (
+                                <Badge
+                                  className="pointer-events-none h-7 w-7 shrink-0 rounded-md border-destructive/25 bg-destructive/10 px-0 text-[11px] font-semibold text-destructive transition-all duration-200 group-hover:border-destructive/50 group-hover:bg-destructive/20 group-hover:shadow-sm"
+                                  title="Absent — click to change"
+                                >
+                                  A
+                                </Badge>
+                              )}
+                              {!st && (
+                                <span
+                                  className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-dashed border-[#dfe5f7] bg-[#fafbff] text-xs text-muted-foreground transition-all duration-200 group-hover:border-[#2b418c]/35 group-hover:bg-[#eef3ff] group-hover:text-[#2b418c] group-hover:shadow-sm"
+                                  title="No record — click to mark"
+                                >
+                                  —
+                                </span>
+                              )}
+                            </button>
                           </TableCell>
                         )
                       })}
@@ -451,10 +542,219 @@ export function AttendanceCalendarPage() {
                   ))}
                 </TableBody>
               </Table>
+              <ul className="space-y-4 p-4 lg:hidden" aria-label="Attendance by employee">
+                {rosterEmployees.map((emp) => (
+                  <li
+                    key={emp.id}
+                    className="rounded-xl border border-[#dfe5f7] bg-[#fafbff] p-4 shadow-sm"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/employees/${emp.id}`)}
+                      className="mb-3 w-full rounded-lg text-left transition-colors hover:bg-[#f0f3fc] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2b418c]/25"
+                    >
+                      <p className="truncate text-sm font-semibold text-[#2b418c]">
+                        {emp.fullName}
+                      </p>
+                      <p className="truncate font-mono text-[11px] text-muted-foreground">
+                        {emp.employeeId} · {emp.department}
+                      </p>
+                    </button>
+                    <p className="mb-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                      {dateColumns.length} days · tap a cell to mark
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {dateColumns.map((d) => {
+                        const ds = format(d, 'yyyy-MM-dd')
+                        const st = matrix.get(`${emp.id}\t${ds}`)
+                        return (
+                          <button
+                            key={ds}
+                            type="button"
+                            disabled={isLoadingGrid}
+                            onClick={() => {
+                              setMarkDialog({ employee: emp, dateStr: ds })
+                              setPendingMarkStatus(null)
+                            }}
+                            className="flex min-w-[2.25rem] flex-col items-center gap-0.5 rounded-md border border-[#e8ecf7] bg-white px-1 py-1.5 text-center transition-all hover:border-[#2b418c]/35 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2b418c]/30 disabled:pointer-events-none disabled:opacity-50"
+                            aria-label={`${format(d, 'EEE d')}: ${st === 'present' ? 'present' : st === 'absent' ? 'absent' : 'unmarked'}`}
+                          >
+                            <span className="text-[9px] font-medium uppercase text-[#2b418c]">
+                              {format(d, 'EEE')}
+                            </span>
+                            <span className="text-[10px] font-semibold tabular-nums text-[#2b418c]">
+                              {format(d, 'd')}
+                            </span>
+                            <span className="mt-0.5">
+                              {st === 'present' && (
+                                <Badge className="h-5 min-w-[1.25rem] border-success/25 bg-success/15 px-0 text-[10px] font-semibold text-success">
+                                  P
+                                </Badge>
+                              )}
+                              {st === 'absent' && (
+                                <Badge className="h-5 min-w-[1.25rem] border-destructive/25 bg-destructive/10 px-0 text-[10px] font-semibold text-destructive">
+                                  A
+                                </Badge>
+                              )}
+                              {!st && (
+                                <span className="inline-flex h-5 w-5 items-center justify-center rounded border border-dashed border-[#dfe5f7] text-[10px] text-muted-foreground">
+                                  —
+                                </span>
+                              )}
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              </>
             )}
           </div>
         </div>
       </div>
+
+      <Dialog
+        open={markDialog !== null}
+        onOpenChange={(open) => {
+          if (!open && !isMarking) {
+            setMarkDialog(null)
+            setPendingMarkStatus(null)
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md" showCloseButton={!isMarking}>
+          {markDialog && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="text-foreground">
+                  {pendingMarkStatus ? 'Confirm attendance' : 'Mark attendance'}
+                </DialogTitle>
+                <DialogDescription asChild>
+                  <div className="space-y-2 text-sm text-muted-foreground">
+                    {!pendingMarkStatus ? (
+                      <>
+                        <p>
+                          <span className="font-medium text-foreground">
+                            {markDialog.employee.fullName}
+                          </span>{' '}
+                          <span className="font-mono text-xs">
+                            ({markDialog.employee.employeeId})
+                          </span>
+                        </p>
+                        <p>
+                          {format(parseISO(markDialog.dateStr), 'EEEE, MMMM d, yyyy')}
+                        </p>
+                        <p>
+                          Current:{' '}
+                          <span className="text-foreground">
+                            {(() => {
+                              const s = matrix.get(
+                                `${markDialog.employee.id}\t${markDialog.dateStr}`,
+                              )
+                              if (!s) return 'Unmarked'
+                              return s === 'present' ? 'Present' : 'Absent'
+                            })()}
+                          </span>
+                        </p>
+                        <p>Choose present or absent, then confirm on the next step.</p>
+                      </>
+                    ) : (
+                      <p>
+                        Mark{' '}
+                        <span className="font-medium text-foreground">
+                          {markDialog.employee.fullName}
+                        </span>{' '}
+                        as{' '}
+                        <span
+                          className={
+                            pendingMarkStatus === 'present'
+                              ? 'font-semibold text-success'
+                              : 'font-semibold text-destructive'
+                          }
+                        >
+                          {pendingMarkStatus === 'present' ? 'present' : 'absent'}
+                        </span>{' '}
+                        on{' '}
+                        {format(parseISO(markDialog.dateStr), 'MMMM d, yyyy')}?
+                      </p>
+                    )}
+                  </div>
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter className="gap-2 sm:flex-row sm:justify-end">
+                {!pendingMarkStatus ? (
+                  <>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={closeMarkDialog}
+                      disabled={isMarking}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      onClick={() => setPendingMarkStatus('absent')}
+                      disabled={isMarking}
+                    >
+                      Mark absent
+                    </Button>
+                    <Button
+                      type="button"
+                      className="bg-success text-success-foreground hover:bg-success/90"
+                      onClick={() => setPendingMarkStatus('present')}
+                      disabled={isMarking}
+                    >
+                      Mark present
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => setPendingMarkStatus(null)}
+                      disabled={isMarking}
+                    >
+                      Back
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={closeMarkDialog}
+                      disabled={isMarking}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      disabled={isMarking}
+                      className={
+                        pendingMarkStatus === 'present'
+                          ? 'bg-success text-success-foreground hover:bg-success/90'
+                          : 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
+                      }
+                      onClick={() => {
+                        void confirmMarkAttendance()
+                      }}
+                    >
+                      {isMarking ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        'Confirm'
+                      )}
+                    </Button>
+                  </>
+                )}
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

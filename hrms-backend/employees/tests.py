@@ -2,10 +2,13 @@
 API tests for employee lifecycle endpoints.
 """
 
+from datetime import date
+
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from attendance.models import Attendance, AttendanceStatus
 from employees.models import Department, Employee
 
 
@@ -142,3 +145,44 @@ class EmployeeAPITestCase(APITestCase):
         names = [row["full_name"] for row in response.json()["data"]["results"]]
         self.assertEqual(names[0], "Apple")
         self.assertEqual(names[-1], "Zebra")
+
+    def test_list_attendance_status_filter(self):
+        """``attendance_date`` + ``attendance_status`` limits to marked employees that day."""
+        day = date(2030, 6, 1)
+        present_emp = Employee.objects.create(
+            employee_id="ATT_P",
+            full_name="Present Only",
+            email="att_p@example.com",
+            department=Department.ENGINEERING,
+        )
+        absent_emp = Employee.objects.create(
+            employee_id="ATT_A",
+            full_name="Absent Only",
+            email="att_a@example.com",
+            department=Department.ENGINEERING,
+        )
+        Employee.objects.create(
+            employee_id="ATT_U",
+            full_name="Unmarked",
+            email="att_u@example.com",
+            department=Department.ENGINEERING,
+        )
+        Attendance.objects.create(
+            employee=present_emp,
+            date=day,
+            status=AttendanceStatus.PRESENT,
+        )
+        Attendance.objects.create(
+            employee=absent_emp,
+            date=day,
+            status=AttendanceStatus.ABSENT,
+        )
+        qs = {"attendance_date": "2030-06-01", "attendance_status": "present"}
+        data = self.client.get(self.list_url, qs).json()["data"]
+        self.assertEqual(data["count"], 1)
+        self.assertEqual(data["results"][0]["full_name"], "Present Only")
+
+        qs["attendance_status"] = "absent"
+        data = self.client.get(self.list_url, qs).json()["data"]
+        self.assertEqual(data["count"], 1)
+        self.assertEqual(data["results"][0]["full_name"], "Absent Only")

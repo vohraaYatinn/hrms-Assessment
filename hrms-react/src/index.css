@@ -134,7 +134,7 @@
     font-feature-settings: 'cv11', 'ss01';
   }
   th {
-    @apply font-medium text-[12px] text-muted-foreground;
+    @apply font-medium text-[12px] text-[#2b418c];
   }
   td {
     @apply text-[13px];

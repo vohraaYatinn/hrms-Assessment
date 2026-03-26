@@ -4,10 +4,12 @@ HTTP handlers for employee collection and detail operations.
 
 import uuid
 
+from django.utils.dateparse import parse_date
 from rest_framework import filters, mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from attendance.models import AttendanceStatus
 from core.responses import success_response
 
 from .models import Department, Employee
@@ -36,6 +38,10 @@ class EmployeeViewSet(
     - ``employee_id`` — exact business id (case-insensitive).
     - ``ordering`` — sort field(s); prefix ``-`` for descending. Allowed:
       ``full_name``, ``email``, ``created_at``, ``employee_id``, ``department``.
+    - ``attendance_date`` — ``YYYY-MM-DD``; use with ``attendance_status`` to restrict the roster
+      to employees marked present or absent on that date (unmarked employees are excluded).
+    - ``attendance_status`` — ``present`` or ``absent`` (case-insensitive); requires a valid
+      ``attendance_date``.
     """
 
     queryset = Employee.objects.all()
@@ -60,6 +66,19 @@ class EmployeeViewSet(
         business_id = (params.get("employee_id") or "").strip()
         if business_id:
             qs = qs.filter(employee_id__iexact=business_id)
+
+        att_date_raw = (params.get("attendance_date") or "").strip()
+        att_status_raw = (params.get("attendance_status") or "").strip().upper()
+        parsed_date = parse_date(att_date_raw)
+        status_by_param = {
+            "PRESENT": AttendanceStatus.PRESENT,
+            "ABSENT": AttendanceStatus.ABSENT,
+        }
+        if parsed_date is not None and att_status_raw in status_by_param:
+            qs = qs.filter(
+                attendance_records__date=parsed_date,
+                attendance_records__status=status_by_param[att_status_raw],
+            )
 
         return qs
 

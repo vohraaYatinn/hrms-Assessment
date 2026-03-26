@@ -106,10 +106,23 @@ export function HRMSProvider({ children }: { children: ReactNode }) {
 
   const markAttendance = useCallback(
     async (employeeId: string, date: string, status: 'present' | 'absent') => {
-      await bulkAttendance({ date, status, employeeIds: [employeeId] })
+      const rec = attendance.find(
+        (a) => a.employeeId === employeeId && a.date === date,
+      )
+      await bulkAttendance({
+        date,
+        status,
+        employeeIds: [employeeId],
+        employeeExpectations: [
+          {
+            employeeId,
+            expectedCurrentStatus: rec ? rec.status : null,
+          },
+        ],
+      })
       await syncAttendanceForDate(date)
     },
-    [syncAttendanceForDate],
+    [attendance, syncAttendanceForDate],
   )
 
   const bulkMarkAttendance = useCallback(
@@ -117,11 +130,28 @@ export function HRMSProvider({ children }: { children: ReactNode }) {
       date: string
       status: 'present' | 'absent'
       employeeIds?: string[]
+      employeeExpectations?: {
+        employeeId: string
+        expectedCurrentStatus: 'present' | 'absent' | null
+      }[]
     }) => {
-      await bulkAttendance(params)
+      let expectations = params.employeeExpectations
+      if (!expectations && params.employeeIds?.length) {
+        expectations = params.employeeIds.map((id) => {
+          const rec = attendance.find((a) => a.employeeId === id && a.date === params.date)
+          return {
+            employeeId: id,
+            expectedCurrentStatus: rec ? rec.status : null,
+          }
+        })
+      }
+      await bulkAttendance({
+        ...params,
+        employeeExpectations: expectations,
+      })
       await syncAttendanceForDate(params.date)
     },
-    [syncAttendanceForDate],
+    [attendance, syncAttendanceForDate],
   )
 
   const getEmployeeAttendance = useCallback(

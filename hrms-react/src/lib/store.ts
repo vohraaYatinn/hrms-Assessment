@@ -159,6 +159,10 @@ export interface HRMSState {
     date: string
     status: 'present' | 'absent'
     employeeIds?: string[]
+    employeeExpectations?: {
+      employeeId: string
+      expectedCurrentStatus: 'present' | 'absent' | null
+    }[]
   }) => Promise<void>
   syncAttendanceForDate: (date: string) => Promise<void>
   getEmployeeAttendance: (employeeId: string) => AttendanceRecord[]
