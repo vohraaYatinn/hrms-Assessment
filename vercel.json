@@ -1,0 +1,7 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "cd hrms-react && npm install",
+  "buildCommand": "cd hrms-react && npm run build",
+  "outputDirectory": "hrms-react/dist",
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+}

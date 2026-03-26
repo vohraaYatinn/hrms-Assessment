@@ -65,6 +65,10 @@ DATABASES = {
 _cors_origins = config("CORS_ALLOWED_ORIGINS", default="", cast=Csv())
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_origins if o.strip()]
+# Vercel production + preview URLs (e.g. app.vercel.app, project-git-branch-user.vercel.app)
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://[a-zA-Z0-9.-]+\.vercel\.app$",
+]
 
 _csrf_origins = [o.strip() for o in config("CSRF_TRUSTED_ORIGINS", default="", cast=Csv()) if o.strip()]
 _render_ext = os.environ.get("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
