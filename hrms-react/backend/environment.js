@@ -1,1 +1,1 @@
-export const backendBaseUrl = "http://localhost:8000";
+export const backendBaseUrl = "https://hrms-assessment-4l8z.onrender.com";
