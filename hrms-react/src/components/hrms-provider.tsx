@@ -12,11 +12,12 @@ import {
 } from '../../backend/api.js'
 
 const EMPLOYEES_SYNC_CHANNEL = 'hrms-employees-sync'
-const INITIAL_FETCH_TIMEOUT_MS = 30_000
+/** Allow extra time right after a cold Render wake before the first data requests time out. */
+const INITIAL_FETCH_TIMEOUT_MS = 60_000
 
 function initialLoadErrorMessage(error: unknown): string {
   if (isTimeoutError(error)) {
-    return 'The server did not respond within 30 seconds. Check your internet connection or verify the HRMS backend is running.'
+    return 'The server did not respond in time. Check your internet connection or verify the HRMS backend is running.'
   }
   return 'Could not load HRMS data. Check your internet connection or verify the backend server is running.'
 }

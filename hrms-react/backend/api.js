@@ -25,6 +25,34 @@ import { backendBaseUrl } from './environment.js'
 const UNKNOWN_OR_REMOVED_EMPLOYEE_MESSAGE =
   'Maybe this employee was deleted or is inactive. Please check the Employees tab.'
 
+/**
+ * Liveness check for waking cold-hosted backends (e.g. Render free tier).
+ * @param {number} [timeoutMs] — abort the request after this many ms
+ * @returns {Promise<boolean>}
+ */
+export async function fetchBackendHealth(timeoutMs = 20000) {
+  const controller = new AbortController()
+  const t = window.setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(`${backendBaseUrl}/api/health/`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+    })
+    if (!response.ok) {
+      // Older backends without this route: do not block the app on the wake screen.
+      if (response.status === 404) return true
+      return false
+    }
+    const payload = await response.json().catch(() => ({}))
+    return payload?.success === true
+  } catch {
+    return false
+  } finally {
+    window.clearTimeout(t)
+  }
+}
+
 /** Thrown on non-OK API responses (includes HTTP status and server error code when present). */
 export class ApiRequestError extends Error {
   /**

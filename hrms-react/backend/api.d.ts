@@ -1,5 +1,7 @@
 import type { AttendanceRecord, Employee } from '../src/lib/types'
 
+export function fetchBackendHealth(timeoutMs?: number): Promise<boolean>
+
 export class ApiRequestError extends Error {
   code?: string
   httpStatus?: number

@@ -11,6 +11,14 @@ from employees.models import Employee
 
 
 @api_view(["GET"])
+def health_check(_request):
+    """
+    Lightweight liveness check for waking free-tier hosts (e.g. Render) without DB access.
+    """
+    return success_response(data={"status": "ok"})
+
+
+@api_view(["GET"])
 def dashboard_stats(request):
     """
     Aggregate HR metrics for the dashboard: headcount and today's attendance.

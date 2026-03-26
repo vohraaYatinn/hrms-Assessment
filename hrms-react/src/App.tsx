@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { Toaster } from 'sonner'
 import type { ReactElement } from 'react'
+import { BackendWakeGate } from '@/components/backend-wake-gate'
 import { HRMSProvider } from '@/components/hrms-provider'
 import { AppLayout } from '@/components/app-layout'
 import { AttendanceCalendarPage } from '@/pages/AttendanceCalendarPage'
@@ -23,27 +24,29 @@ function ProtectedRoute({ children }: { children: ReactElement }) {
 export default function App() {
   return (
     <BrowserRouter>
-      <HRMSProvider>
-        <Routes>
-          <Route path="/" element={<LoginPage />} />
-          <Route path="/login" element={<LoginPage />} />
-          <Route
-            element={
-              <ProtectedRoute>
-                <AppLayout />
-              </ProtectedRoute>
-            }
-          >
-            <Route path="/dashboard" element={<DashboardPage />} />
-            <Route path="/employees" element={<EmployeesPage />} />
-            <Route path="/employees/:id" element={<EmployeeDetailPage />} />
-            <Route path="/attendance/calendar" element={<AttendanceCalendarPage />} />
-            <Route path="/attendance" element={<AttendancePage />} />
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
-          </Route>
-        </Routes>
-        <Toaster position="top-right" richColors />
-      </HRMSProvider>
+      <BackendWakeGate>
+        <HRMSProvider>
+          <Routes>
+            <Route path="/" element={<LoginPage />} />
+            <Route path="/login" element={<LoginPage />} />
+            <Route
+              element={
+                <ProtectedRoute>
+                  <AppLayout />
+                </ProtectedRoute>
+              }
+            >
+              <Route path="/dashboard" element={<DashboardPage />} />
+              <Route path="/employees" element={<EmployeesPage />} />
+              <Route path="/employees/:id" element={<EmployeeDetailPage />} />
+              <Route path="/attendance/calendar" element={<AttendanceCalendarPage />} />
+              <Route path="/attendance" element={<AttendancePage />} />
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            </Route>
+          </Routes>
+          <Toaster position="top-right" richColors />
+        </HRMSProvider>
+      </BackendWakeGate>
     </BrowserRouter>
   )
 }
