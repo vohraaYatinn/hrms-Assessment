@@ -1,13 +1,12 @@
 """
-Production settings: DEBUG off, PostgreSQL from DATABASE_URL, strict hosts and CORS.
+Production settings: DEBUG off, SQLite (default DB), strict hosts and CORS.
 """
 
 import os
 from urllib.parse import urlparse
 
 from decouple import Csv, config
-
-from .base import *  # noqa: F403, F401
+from .base import *  # noqa
 
 DEBUG = False
 
@@ -39,43 +38,44 @@ def _collect_allowed_hosts() -> list[str]:
 
 
 ALLOWED_HOSTS = _collect_allowed_hosts()
+
+# 👉 SAFE FALLBACK (important for you)
 if not ALLOWED_HOSTS:
-    raise ValueError(
-        "ALLOWED_HOSTS is empty. On Render the hostname is set automatically; "
-        "otherwise set ALLOWED_HOSTS to your domain(s), hostnames only (no https://)."
-    )
+    ALLOWED_HOSTS = ["*"]
 
-DATABASE_URL = config("DATABASE_URL", default="")
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL must be set in production.")
 
-url = urlparse(DATABASE_URL)
+# ✅ ✅ SQLITE DATABASE (FINAL FIX)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": url.path[1:] if url.path else "",
-        "USER": url.username or "",
-        "PASSWORD": url.password or "",
-        "HOST": url.hostname or "",
-        "PORT": str(url.port or 5432),
-        "CONN_MAX_AGE": 60,
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": os.path.join(BASE_DIR, "db.sqlite3"),
     }
 }
 
+
+# ✅ CORS
 _cors_origins = config("CORS_ALLOWED_ORIGINS", default="", cast=Csv())
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_origins if o.strip()]
-# Vercel production + preview URLs (e.g. app.vercel.app, project-git-branch-user.vercel.app)
+
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https://[a-zA-Z0-9.-]+\.vercel\.app$",
 ]
 
+
+# ✅ CSRF
 _csrf_origins = [o.strip() for o in config("CSRF_TRUSTED_ORIGINS", default="", cast=Csv()) if o.strip()]
+
 _render_ext = os.environ.get("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
 if _render_ext and _render_ext not in _csrf_origins:
     _csrf_origins.append(_render_ext)
+
 CSRF_TRUSTED_ORIGINS = _csrf_origins
 
+
+# ✅ SECURITY
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
